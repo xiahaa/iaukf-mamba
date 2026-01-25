@@ -8,7 +8,7 @@ def main():
     print("--- Starting Augmented State Estimation (IAUKF) ---")
 
     # 1. Phase 1: Simulation
-    steps = 150 # 150 steps is enough to show convergence
+    steps = 20  # Reduced for faster testing
     sim = PowerSystemSimulation(steps=steps)
     data = sim.run_simulation()
 
@@ -67,14 +67,18 @@ def main():
 
     print("Running Filter...")
     for t in range(steps):
+        print(f"  Step {t}/{steps}...", end='\r')
         iaukf.predict()
         x_est = iaukf.update(Z_all[t])
 
         history_r.append(x_est[-2])
         history_x.append(x_est[-1])
 
-        if t % 20 == 0:
-            print(f"Step {t}: R_est={x_est[-2]:.4f}, X_est={x_est[-1]:.4f}")
+        if t % 5 == 0:
+            print(f"Step {t:3d}: R_est={x_est[-2]:.4f}, X_est={x_est[-1]:.4f}")
+
+    print("\nFilter completed!")
+    print(f"Final: R_est={x_est[-2]:.4f} (true={data['r_true']:.4f}), X_est={x_est[-1]:.4f} (true={data['x_true']:.4f})")
 
     # 5. Visualization
     plt.figure(figsize=(12, 6))
@@ -98,9 +102,11 @@ def main():
     plt.grid(True)
 
     plt.tight_layout()
-    plt.show()
+    plt.savefig('iaukf_results.png', dpi=150)
+    print("Plot saved as 'iaukf_results.png'")
+    plt.close()
 
-    print("Done. Check plots for convergence.")
+    print("Done!")
 
 if __name__ == "__main__":
     main()

@@ -12,6 +12,9 @@ pandapower>=2.13.0
 torch>=2.0.0
 torch-geometric>=2.3.0
 
+# Experiment Tracking
+swanlab>=0.3.0
+
 # Optional: Mamba SSM (for advanced State Space Models)
 # Note: mamba-ssm requires CUDA. Install separately if needed:
 # pip install mamba-ssm

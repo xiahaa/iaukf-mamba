@@ -12,17 +12,12 @@ class DistributionSystemModel:
         # State Vector Size: 2*N_bus + 2 (R, X)
         self.state_dim = 2 * self.num_buses + 2
 
-        # Holt's Smoothing parameters
-        self.alpha_h = 0.8
-        self.beta_h = 0.5
-
-        # Cache for Ybus to avoid repeated recalculation
-        self._ybus_cache = {}
-        self._last_params = None
-
         # Store original line parameters for restoration
         self.original_r = self.net.line.at[self.target_line_idx, 'r_ohm_per_km']
         self.original_x = self.net.line.at[self.target_line_idx, 'x_ohm_per_km']
+
+        # Cache for last successful measurement (fallback)
+        self._last_measurement = None
 
     def state_transition(self, x):
         """
@@ -34,104 +29,76 @@ class DistributionSystemModel:
 
     def measurement_function(self, x):
         """
-        h(x): Predicted measurements from state x.
+        h(x): Predicted measurements from state x using pandapower's power flow.
         x = [V_1...V_n, delta_1...delta_n, R_34, X_34]
+
+        This approach ensures consistency with the simulation by using
+        the same power flow solver.
         """
         # 1. Extract State
         v_mag = x[:self.num_buses]
         delta = x[self.num_buses : 2*self.num_buses]
-        r_est = max(x[-2], 1e-6)  # Ensure positive resistance
-        x_est = max(x[-1], 1e-6)  # Ensure positive reactance
+        r_est = max(float(x[-2]), 1e-6)  # Ensure positive resistance
+        x_est = max(float(x[-1]), 1e-6)  # Ensure positive reactance
 
-        # 2. Update Grid Parameter in the Net copy (with caching)
-        params_key = (round(r_est, 8), round(x_est, 8))
+        # 2. Update line parameters in the network
+        self.net.line.at[self.target_line_idx, 'r_ohm_per_km'] = r_est
+        self.net.line.at[self.target_line_idx, 'x_ohm_per_km'] = x_est
 
-        # Only recalculate Ybus if parameters changed significantly
-        if self._last_params is None or \
-           abs(params_key[0] - self._last_params[0]) > 1e-7 or \
-           abs(params_key[1] - self._last_params[1]) > 1e-7:
+        # 3. Set voltage magnitude and angle as initial guess
+        # This speeds up convergence and uses state information
+        for i in range(len(v_mag)):
+            v_val = float(np.clip(v_mag[i], 0.8, 1.2))
+            angle_val = float(np.clip(delta[i], -np.pi, np.pi))
+            self.net.bus.at[i, 'vm_pu'] = v_val
+            self.net.bus.at[i, 'va_degree'] = np.degrees(angle_val)
 
-            self.net.line.at[self.target_line_idx, 'r_ohm_per_km'] = r_est
-            self.net.line.at[self.target_line_idx, 'x_ohm_per_km'] = x_est
+        # 4. Run power flow with state as initial guess
+        try:
+            pp.runpp(self.net,
+                    init='results',  # Use current bus values as initial guess
+                    calculate_voltage_angles=True,
+                    numba=False,
+                    enforce_q_lims=False,
+                    max_iteration=20)
 
-            # Build Ybus manually from line parameters (most reliable method)
-            try:
-                n_bus = len(self.net.bus)
-                Ybus = np.zeros((n_bus, n_bus), dtype=complex)
+            # Extract SCADA measurements: P, Q injections and V magnitude
+            p_inj = -self.net.res_bus.p_mw.values  # Negative for injection convention
+            q_inj = -self.net.res_bus.q_mvar.values
+            v_scada = self.net.res_bus.vm_pu.values
 
-                # Add line admittances
-                for _, line in self.net.line.iterrows():
-                    fb = int(line.from_bus)
-                    tb = int(line.to_bus)
-                    r = line.r_ohm_per_km * line.length_km
-                    x = line.x_ohm_per_km * line.length_km
-                    z = r + 1j * x
-                    y = 1.0 / z if abs(z) > 1e-10 else 1e-10
-                    # Add shunt capacitance if present
-                    if 'c_nf_per_km' in line and not np.isnan(line.c_nf_per_km):
-                        b_sh = line.c_nf_per_km * line.length_km * 1e-9 * 2 * np.pi * 50  # Assume 50Hz
-                        y_sh = 1j * b_sh / 2  # Split between buses
-                        Ybus[fb, fb] += y_sh
-                        Ybus[tb, tb] += y_sh
-                    # Add series admittance
-                    Ybus[fb, fb] += y
-                    Ybus[tb, tb] += y
-                    Ybus[fb, tb] -= y
-                    Ybus[tb, fb] -= y
+            h_scada = np.concatenate([p_inj, q_inj, v_scada])
 
-                # Add transformer admittances if present
-                if len(self.net.trafo) > 0:
-                    for _, trafo in self.net.trafo.iterrows():
-                        hv_bus = int(trafo.hv_bus)
-                        lv_bus = int(trafo.lv_bus)
-                        # Simplified transformer model
-                        vk_percent = trafo.vk_percent if 'vk_percent' in trafo else 6.0
-                        sn_mva = trafo.sn_mva if 'sn_mva' in trafo else 0.4
-                        z_pu = (vk_percent / 100) * 1j  # Simplified: mostly reactive
-                        y_trafo = 1.0 / z_pu if abs(z_pu) > 1e-10 else 1e-10
-                        Ybus[hv_bus, hv_bus] += y_trafo
-                        Ybus[lv_bus, lv_bus] += y_trafo
-                        Ybus[hv_bus, lv_bus] -= y_trafo
-                        Ybus[lv_bus, hv_bus] -= y_trafo
+            # Extract PMU measurements: V magnitude and angle
+            v_pmu = self.net.res_bus.vm_pu.values[self.pmu_indices]
+            theta_pmu = np.radians(self.net.res_bus.va_degree.values[self.pmu_indices])
 
-                self._ybus_cache[params_key] = Ybus
-                self._last_params = params_key
+            h_pmu = np.concatenate([v_pmu, theta_pmu])
 
-            except Exception as e:
-                # Final fallback: use cached version or create identity
-                if self._last_params is not None and self._last_params in self._ybus_cache:
-                    Ybus = self._ybus_cache[self._last_params]
-                else:
-                    print(f"Warning: Ybus construction failed: {e}. Using identity matrix.")
-                    n_bus = len(self.net.bus)
-                    Ybus = np.eye(n_bus, dtype=complex) * 0.01
-                    self._ybus_cache[params_key] = Ybus
-                    self._last_params = params_key
-        else:
-            Ybus = self._ybus_cache[params_key]
+            result = np.concatenate([h_scada, h_pmu])
 
-        # 3. Calculate Power Flow (S = V * conj(Y * V))
-        # Construct complex voltage with bounds checking
-        v_mag_bounded = np.clip(v_mag, 0.8, 1.2)  # Prevent unrealistic voltages
-        delta_bounded = np.clip(delta, -np.pi, np.pi)  # Wrap angles
-        V_complex = v_mag_bounded * np.exp(1j * delta_bounded)
+            # Cache successful measurement
+            self._last_measurement = result
 
-        # Current Injection I = Y * V
-        I_inj = Ybus.dot(V_complex)
+            return result
 
-        # Power Injection S = V * conj(I)
-        S_inj = V_complex * np.conj(I_inj)
+        except Exception as e:
+            # If power flow fails, use a fallback based on last successful run
+            # or return a measurement based on the state directly
+            if hasattr(self, '_last_measurement') and self._last_measurement is not None:
+                # Return cached measurement (filter will handle the mismatch)
+                return self._last_measurement
+            else:
+                # Construct a simple measurement from state
+                # SCADA: use zeros for P,Q and state voltages
+                p_zero = np.zeros(self.num_buses)
+                q_zero = np.zeros(self.num_buses)
+                v_state = np.clip(v_mag, 0.8, 1.2)
+                h_scada = np.concatenate([p_zero, q_zero, v_state])
 
-        P_calc = np.real(S_inj)
-        Q_calc = np.imag(S_inj)
+                # PMU: use state values
+                v_pmu = v_state[self.pmu_indices]
+                theta_pmu = np.clip(delta[self.pmu_indices], -np.pi, np.pi)
+                h_pmu = np.concatenate([v_pmu, theta_pmu])
 
-        # 4. Assemble Predicted Measurements
-        # SCADA: P_all, Q_all, V_all
-        h_scada = np.concatenate([P_calc, Q_calc, v_mag_bounded])
-
-        # PMU: V_pmu, Theta_pmu
-        v_pmu = v_mag_bounded[self.pmu_indices]
-        theta_pmu = delta_bounded[self.pmu_indices]
-        h_pmu = np.concatenate([v_pmu, theta_pmu])
-
-        return np.concatenate([h_scada, h_pmu])
+                return np.concatenate([h_scada, h_pmu])

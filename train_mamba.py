@@ -9,6 +9,15 @@ import pandapower as pp
 import os
 from torch.utils.data import Dataset, DataLoader
 
+# SwanLab integration
+try:
+    import swanlab
+    HAS_SWANLAB = True
+except ImportError:
+    HAS_SWANLAB = False
+    print("Warning: swanlab not installed. Install with: pip install swanlab")
+    print("Continuing without logging...")
+
 # --- Configuration ---
 NUM_TRAIN_EPISODES = 50      # Number of simulation runs for training
 NUM_VAL_EPISODES = 10        # Number of validation episodes
@@ -19,10 +28,17 @@ LEARNING_RATE = 1e-3
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 CHECKPOINT_PATH = 'graph_mamba_checkpoint.pt'
 
+# SwanLab Configuration
+USE_SWANLAB = HAS_SWANLAB and True  # Set to False to disable even if installed
+SWANLAB_PROJECT = "power-grid-estimation"
+SWANLAB_EXPERIMENT = "graph-mamba-training"
+
 print(f"Using device: {DEVICE}")
 if DEVICE.type == 'cuda':
     print(f"GPU: {torch.cuda.get_device_name(0)}")
     print(f"Available GPUs: {torch.cuda.device_count()}")
+if USE_SWANLAB:
+    print(f"SwanLab logging: ENABLED (project: {SWANLAB_PROJECT})")
 
 
 class PowerGridDataset(Dataset):
@@ -230,6 +246,27 @@ def train():
     print("TRAINING START")
     print("=" * 60)
 
+    # Initialize SwanLab if available
+    if USE_SWANLAB:
+        swanlab.init(
+            project=SWANLAB_PROJECT,
+            experiment_name=SWANLAB_EXPERIMENT,
+            config={
+                "model": "GraphMamba",
+                "num_train_episodes": NUM_TRAIN_EPISODES,
+                "num_val_episodes": NUM_VAL_EPISODES,
+                "steps_per_episode": STEPS_PER_EPISODE,
+                "batch_size": BATCH_SIZE,
+                "epochs": EPOCHS,
+                "learning_rate": LEARNING_RATE,
+                "d_model": 64,
+                "device": str(DEVICE),
+                "num_gpus": torch.cuda.device_count() if torch.cuda.is_available() else 0,
+            },
+            logdir="./swanlog",
+        )
+        print(f"✓ SwanLab initialized")
+
     train_loss_history = []
     val_loss_history = []
     best_val_loss = float('inf')
@@ -246,12 +283,27 @@ def train():
         val_loss_history.append(val_loss)
 
         # Learning rate scheduling
+        old_lr = optimizer.param_groups[0]['lr']
         scheduler.step(val_loss)
+        new_lr = optimizer.param_groups[0]['lr']
 
         # Print progress
         print(f"Epoch {epoch+1:3d}/{EPOCHS} | "
               f"Train Loss: {train_loss:.6f} (MSE: {train_mse:.6f}) | "
-              f"Val Loss: {val_loss:.6f} (MSE: {val_mse:.6f})")
+              f"Val Loss: {val_loss:.6f} (MSE: {val_mse:.6f}) | "
+              f"LR: {new_lr:.2e}")
+
+        # Log to SwanLab
+        if USE_SWANLAB:
+            swanlab.log({
+                "train/loss": train_loss,
+                "train/mse": train_mse,
+                "train/physics_loss": train_phy,
+                "val/loss": val_loss,
+                "val/mse": val_mse,
+                "train/learning_rate": new_lr,
+                "epoch": epoch + 1,
+            })
 
         # Save best model
         if val_loss < best_val_loss:
@@ -266,6 +318,9 @@ def train():
                 'in_features': in_features,
             }, CHECKPOINT_PATH)
             print(f"  → Checkpoint saved (Val Loss: {val_loss:.6f})")
+
+            if USE_SWANLAB:
+                swanlab.log({"best_val_loss": best_val_loss})
 
     # 4. Final Evaluation
     print("\n" + "=" * 60)
@@ -313,10 +368,18 @@ def train():
     plt.tight_layout()
     plt.savefig("training_loss.png", dpi=150)
     print("\n✓ Loss curve saved as 'training_loss.png'")
+
+    # Log to SwanLab
+    if USE_SWANLAB:
+        swanlab.log({"training_curve": swanlab.Image("training_loss.png")})
+
     plt.close()
 
     print("\n" + "=" * 60)
     print(f"✓ Training checkpoint saved as '{CHECKPOINT_PATH}'")
+    if USE_SWANLAB:
+        print(f"✓ Training logs saved to SwanLab (./swanlog/)")
+        swanlab.finish()
     print("=" * 60)
 
 
