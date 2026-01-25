@@ -28,9 +28,11 @@ class PowerSystemSimulation:
         # PMU locations (0-indexed): 3, 6, 9, 11, 14, 17, 19, 22, 24, 26, 29, 32
         self.pmu_buses = [3, 6, 9, 11, 14, 17, 19, 22, 24, 26, 29, 32]
 
-    def run_simulation(self):
+    def run_simulation(self, seed=None):
         """Generates ground truth states and noisy measurements."""
-        np.random.seed(42)
+        if seed is None:
+            seed = 42
+        np.random.seed(seed)
 
         z_scada_list = []
         z_pmu_list = []
@@ -46,11 +48,22 @@ class PowerSystemSimulation:
             self.net.load.p_mw = p_load_base * fluctuation
             self.net.load.q_mvar = q_load_base * fluctuation
 
-            # 2. Run Power Flow
-            try:
-                pp.runpp(self.net, algorithm='nr')
-            except:
-                print(f"Power flow failed at step {t}")
+            # 2. Run Power Flow with better error handling
+            max_retries = 3
+            success = False
+            for retry in range(max_retries):
+                try:
+                    pp.runpp(self.net, algorithm='nr', numba=False)
+                    success = True
+                    break
+                except Exception as e:
+                    if retry < max_retries - 1:
+                        # Try with flat start
+                        pp.runpp(self.net, algorithm='nr', init='flat', numba=False)
+                    else:
+                        print(f"Power flow failed at step {t} after {max_retries} retries: {e}")
+
+            if not success:
                 continue
 
             # 3. Collect True States [V_mag (33), Delta (33), R, X]

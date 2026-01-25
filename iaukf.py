@@ -58,13 +58,42 @@ class IAUKF:
             self.P_pred += self.Wc[i] * np.outer(diff, diff)
         self.P_pred += self.Q
 
+        # Ensure symmetry and positive definiteness
+        self.P_pred = (self.P_pred + self.P_pred.T) / 2
+        # Add small regularization to maintain numerical stability
+        self.P_pred += np.eye(self.n) * 1e-9
+
     def update(self, z):
         # 1. Propagate Sigma Points through Measurement Function
-        # Note: We regenerate sigmas from P_pred or reuse propagated ones?
-        # Standard UKF usually regenerates from x_pred, P_pred.
-        sigmas_pred = self.sigma_points(self.x_pred, self.P_pred)
+        # Reuse predicted sigma points instead of regenerating
+        sigmas_pred = self.sigmas_f  # Use already propagated sigma points
 
-        Z_sigmas = np.array([self.sys.measurement_function(s) for s in sigmas_pred])
+        Z_sigmas = []
+        failed_count = 0
+        for idx, s in enumerate(sigmas_pred):
+            try:
+                h = self.sys.measurement_function(s)
+                if not isinstance(h, np.ndarray):
+                    print(f"Warning: measurement_function returned {type(h)}: {h}")
+                    h = np.array(h)
+                Z_sigmas.append(h)
+            except Exception as e:
+                failed_count += 1
+                if failed_count <= 2:  # Only print first few failures
+                    print(f"Warning: Measurement failed for sigma {idx}: {type(e).__name__}: {str(e)[:100]}")
+                # Use previous successful measurement or skip
+                if len(Z_sigmas) > 0:
+                    Z_sigmas.append(Z_sigmas[-1])  # Reuse last good measurement
+                else:
+                    # First sigma point failed, return prediction
+                    self.x = self.x_pred
+                    self.P = self.P_pred
+                    return self.x
+
+        if failed_count > 0 and failed_count < len(sigmas_pred):
+            print(f"  ({failed_count} total measurement failures)")
+
+        Z_sigmas = np.array(Z_sigmas)
 
         # 2. Predict Measurement Mean
         z_pred = np.dot(self.Wm, Z_sigmas)
@@ -76,6 +105,9 @@ class IAUKF:
             S += self.Wc[i] * np.outer(diff, diff)
         S += self.R
 
+        # Ensure S is symmetric
+        S = (S + S.T) / 2
+
         # 4. Cross Covariance
         Pxz = np.zeros((self.n, len(z)))
         for i in range(2*self.n + 1):
@@ -84,11 +116,29 @@ class IAUKF:
             Pxz += self.Wc[i] * np.outer(diff_x, diff_z)
 
         # 5. Kalman Gain and Update
-        K = np.dot(Pxz, np.linalg.inv(S))
+        try:
+            S_inv = np.linalg.inv(S)
+        except np.linalg.LinAlgError:
+            # Use pseudo-inverse if singular
+            S_inv = np.linalg.pinv(S)
+
+        K = np.dot(Pxz, S_inv)
         residual = z - z_pred
+
+        # Outlier detection: clip large residuals
+        residual_norm = np.linalg.norm(residual)
+        if residual_norm > 100:  # Threshold for outlier
+            print(f"Warning: Large residual detected: {residual_norm:.2f}, clipping...")
+            residual = residual / residual_norm * 100
 
         self.x = self.x_pred + np.dot(K, residual)
         self.P = self.P_pred - np.dot(K, np.dot(S, K.T))
+
+        # Ensure P is symmetric and positive definite
+        self.P = (self.P + self.P.T) / 2
+        min_eig = np.min(np.linalg.eigvalsh(self.P))
+        if min_eig < 0:
+            self.P += np.eye(self.n) * (abs(min_eig) + 1e-6)
 
         # --- Adaptive Noise Statistic Estimator (NSE) ---
         self.adaptive_noise_update(residual, K, S)
@@ -107,15 +157,6 @@ class IAUKF:
         # Term = K * epsilon * epsilon^T * K^T
         term1 = np.dot(K, np.dot(np.outer(residual, residual), K.T))
 
-        # Simplified update logic typically used in adaptive filtering:
-        # Q_new ~ K * residual * residual' * K' + P_posterior ...
-        # Based on the paper's specific Equation 17:
-        # It approximates Q based on the consistency of residuals.
-
-        # To strictly follow the logic without the complex sigma summation term for Q:
-        # We use the simplified form: Q_new = K * (eps*eps^T) * K^T + P - P_pred_minus_Q
-        # Or simpler: Q_new = alpha * Q_old + (1-alpha) * (K*eps*eps^T*K^T)
-
         # Implementing Eq 17 exactly requires the sigma term summation which is P_pred - Q_k.
         # Let's approximate the Bracket term as: K*e*e^T*K^T + P_posterior - (P_pred - Q_old)
         # This simplifies to Q_new = Q_old + d_k * (K*e*e^T*K^T + P_posterior - P_pred)
@@ -125,13 +166,25 @@ class IAUKF:
 
         Q_next = (1 - d_k) * self.Q + d_k * update_term
 
+        # Make symmetric
+        Q_next = (Q_next + Q_next.T) / 2
+
         # Constraint (Eq 18): Check Positive Definiteness
-        # If not, use diagonal
         try:
             cholesky(Q_next)
             self.Q = Q_next
         except np.linalg.LinAlgError:
-            # Fallback to diagonal
-            self.Q = np.diag(np.diag(Q_next))
-            # Ensure non-negative diagonal
-            self.Q[self.Q < 0] = 1e-6
+            # Try to fix by taking diagonal elements and ensuring positivity
+            Q_diag = np.diag(np.abs(np.diag(Q_next)))
+            # Clip to reasonable range
+            Q_diag = np.clip(Q_diag, 1e-8, 1.0)
+
+            try:
+                cholesky(Q_diag)
+                self.Q = Q_diag
+            except:
+                # Final fallback: keep old Q with small inflation
+                self.Q = self.Q * 1.01 + np.eye(self.n) * 1e-6
+
+        # Additional safeguard: clip Q values to prevent explosion
+        self.Q = np.clip(self.Q, 1e-8, 1.0)
