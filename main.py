@@ -1,8 +1,8 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from simulation import PowerSystemSimulation
-from .model.models import DistributionSystemModel
-from .model.iaukf import IAUKF
+from model.simulation import PowerSystemSimulation
+from model.models import DistributionSystemModel
+from model.iaukf import IAUKF
 
 def main():
     print("--- Starting Augmented State Estimation (IAUKF) ---")
