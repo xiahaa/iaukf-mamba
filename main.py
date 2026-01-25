@@ -1,14 +1,14 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from simulation import PowerSystemSimulation
-from models import DistributionSystemModel
-from iaukf import IAUKF
+from .model.models import DistributionSystemModel
+from .model.iaukf import IAUKF
 
 def main():
     print("--- Starting Augmented State Estimation (IAUKF) ---")
 
     # 1. Phase 1: Simulation
-    steps = 20  # Reduced for faster testing
+    steps = 150  # Reduced for faster testing
     sim = PowerSystemSimulation(steps=steps)
     data = sim.run_simulation()
 
@@ -102,7 +102,7 @@ def main():
     plt.grid(True)
 
     plt.tight_layout()
-    plt.savefig('iaukf_results.png', dpi=150)
+    plt.savefig('tmp/iaukf_results.png', dpi=150)
     print("Plot saved as 'iaukf_results.png'")
     plt.close()
 
