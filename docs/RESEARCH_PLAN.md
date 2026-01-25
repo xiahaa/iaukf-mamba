@@ -10,7 +10,7 @@ Three-phase approach to validate IAUKF and demonstrate Graph Mamba superiority:
 
 ---
 
-## Phase 1: Reproduce Paper's IAUKF Work
+## ~~Phase 1: Reproduce Paper's IAUKF Work~~
 
 ### Goal
 Validate our IAUKF implementation by reproducing paper's results.
