@@ -8,11 +8,10 @@ Okay, here is a summary of the core contributions and experimental design for yo
 
 ### **1. Introduction & Motivation**
 
-* **The Problem:** accurate knowledge of distribution line parameters (Resistance , Reactance ) is critical for advanced grid management (DSE, Optimal Power Flow). However, these parameters drift over time due to aging, temperature, and maintenance, leading to "parameter error" that degrades state estimation.
+* **The Problem:**  accurate knowledge of distribution line parameters (Resistance $R$, Reactance $X$) is critical for advanced grid management (DSE, Optimal Power Flow). However, these parameters drift over time due to aging, temperature, and maintenance, leading to "parameter error" that degrades state estimation.
 * **The Gap:**
-* **Traditional Model-Based Methods** (like the Augmented UKF) are theoretically grounded but computationally expensive (), slow to converge, and struggle with non-Gaussian noise or sudden topology changes.
-* **Existing Deep Learning Methods** (like RNNs/Transformers) often lack physical consistency or suffer from quadratic complexity (), making them inefficient for long historical sequences.
-
+* **Traditional Model-Based Methods** (like the Augmented UKF) are theoretically grounded but computationally expensive ($O(N^3)$), slow to converge, and struggle with non-Gaussian noise or sudden topology changes.
+* **Existing Deep Learning Methods** (like RNNs/Transformers) often lack physical consistency or suffer from quadratic complexity ($O(L^2)$), making them inefficient for long historical sequences.
 
 * **The Solution:** We propose a **Physics-Informed Graph Mamba (PI-GraphMamba)** framework. It combines the spatial awareness of Graph Neural Networks (GNNs) with the linear-complexity temporal modeling of Mamba (Selective State Space Models).
 * **Key Insight:** Mamba's "Selective Scan" mechanism allows the model to differentiate between transient measurement noise (to be ignored) and persistent parameter drift (to be learned), solving the noise-vs-drift dilemma inherent in Kalman Filters.
@@ -23,11 +22,10 @@ Okay, here is a summary of the core contributions and experimental design for yo
 
 1. **Architecture: Spatio-Temporal Graph Mamba**
 * We introduce a novel hybrid architecture that first encodes grid snapshots into latent embeddings using a **Graph Convolutional Network (GCN)** to capture spatial correlations and topology.
-* These embeddings are fed into a **Mamba Block**, which models the temporal evolution of the grid state with  complexity, enabling efficient processing of long measurement horizons.
-
+* These embeddings are fed into a **Mamba Block**, which models the temporal evolution of the grid state with $O(L)$ complexity, enabling efficient processing of long measurement horizons.
 
 2. **Physics-Informed Learning Framework**
-* Unlike black-box models, our training objective incorporates a **Physical Consistency Loss ()**.
+* Unlike black-box models, our training objective incorporates a **Physical Consistency Loss  ($L_{phy}$).**.
 * The model minimizes a dual objective: the error in parameter estimation (Supervised Loss) AND the residual of the power flow equations (Unsupervised Physics Loss), ensuring that estimated parameters satisfy Kirchhoff's laws.
 
 
@@ -49,18 +47,18 @@ We validate our approach on the **IEEE 33-Bus Distribution System** using a high
 #### **A. Baseline Comparison**
 
 * **Benchmark:** Improved Adaptive Unscented Kalman Filter (IAUKF) [Wang et al., 2022].
-* **Metric:** Root Mean Squared Error (RMSE) of estimated  and .
-* **Setup:** 200 time-step simulation with dynamic load profiles ( fluctuation) and Gaussian measurement noise (, ).
+* **Metric:** Root Mean Squared Error (RMSE) of estimated $R$ and $X$.
+* **Setup:** 200 time-step simulation with dynamic load profiles ($\pm 10\%$ fluctuation) and Gaussian measurement noise ($\sigma_{SCADA}=0.02$, $\sigma_{PMU}=0.005$).
 
 #### **B. Convergence Analysis**
 
-* **Observation:** The IAUKF requires 50-80 time steps to converge from a distorted initial guess ().
+* **Observation:** The IAUKF requires 50-80 time steps to converge from a distorted initial guess ($0.5 \times R_{true}$).
 * **Result:** Graph Mamba demonstrates "One-Shot Calibration," achieving <0.5% error almost instantaneously by leveraging learned patterns from the training distribution.
 
 #### **C. Stress Testing (The "Breakthrough" Results)**
 
 1. **Topology Change Resilience:**
-* *Scenario:* A line trip occurs at .
+* *Scenario:*  A line trip occurs at $t=100$.
 * *Result:* IAUKF estimation error spikes significantly. Graph Mamba maintains stability, adapting to the new graph structure via the GNN encoder.
 
 
@@ -78,12 +76,12 @@ We validate our approach on the **IEEE 33-Bus Distribution System** using a high
 
 * *Left:* GCN Encoder processing the IEEE 33-bus graph.
 * *Center:* The Mamba Block Unrolling over time.
-* *Right:* Output Head predicting  and .
+* *Right:* Output Head predicting $R$ and $X$.
 
 **Fig 2. Convergence Trajectory (Time-Series Plot)**
 
 * *X-Axis:* Time Steps (0-200).
-* *Y-Axis:* Estimated Resistance ().
+* *Y-Axis:* Estimated Resistance ($R$)
 * *Lines:* Ground Truth (Green dashed), IAUKF (Orange, converging slowly), Graph Mamba (Blue, stable/flat).
 
 **Fig 3. Error Distribution (Box Plot)**
@@ -92,5 +90,5 @@ We validate our approach on the **IEEE 33-Bus Distribution System** using a high
 
 **Table 1. Numerical Performance Summary**
 
-* Columns: Method, Mean RMSE (), Mean RMSE (), Inference Time (ms).
+* Columns: Method, Mean RMSE ($R$), Mean RMSE ($X$), Inference Time (ms).
 * *Highlight:* Mamba achieves lower error with orders-of-magnitude faster inference speed.
