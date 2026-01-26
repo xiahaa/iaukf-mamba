@@ -247,7 +247,7 @@ def main():
     criterion = PhysicsInformedLoss(lambda_phy=LAMBDA_PHY)
     optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='min', factor=0.5, patience=10, verbose=True
+        optimizer, mode='min', factor=0.5, patience=10
     )
 
     total_params = sum(p.numel() for p in model.parameters())
@@ -295,8 +295,13 @@ def main():
         val_metrics = evaluate(model, val_loader, criterion, DEVICE, desc="Val")
 
         # Scheduler step
+        old_lr = optimizer.param_groups[0]['lr']
         scheduler.step(val_metrics['loss'])
         current_lr = optimizer.param_groups[0]['lr']
+
+        # Print LR reduction if it changed
+        if current_lr != old_lr:
+            print(f"    → Learning rate reduced: {old_lr:.2e} → {current_lr:.2e}")
 
         # Print epoch summary
         print(f"\n  Epoch {epoch+1}/{EPOCHS} Summary:")
