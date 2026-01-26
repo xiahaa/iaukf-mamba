@@ -1,0 +1,150 @@
+% DISCUSSION AND CONCLUSION SECTIONS
+% Copy this content into main.tex Sections 7 and 8
+
+\section{Discussion}
+\label{sec:discussion}
+
+\subsection{Why Graph Mamba Succeeds}
+
+The superior performance of Graph Mamba over IAUKF can be attributed to three key factors:
+
+\subsubsection{Learning vs. Modeling}
+IAUKF is a model-based method that assumes a specific process model ($\mathbf{x}_t = \mathbf{x}_{t-1} + \mathbf{w}_t$ with small $\mathbf{Q}$), essentially assuming parameters are constant or near-constant. When parameters vary significantly, this model mismatches reality, causing poor performance. Graph Mamba, in contrast, learns the dynamics from data without making restrictive assumptions. It discovers that parameters can change abruptly and adapts accordingly.
+
+\subsubsection{Topology Awareness}
+The GNN component of Graph Mamba exploits network topology, learning that neighboring buses influence each other through power flows. This spatial inductive bias helps the model generalize better and provides robustness. IAUKF treats the system as a black-box state vector, ignoring the underlying graph structure.
+
+\subsubsection{Selective State Spaces}
+Mamba's selective mechanism allows the model to dynamically focus on relevant information at each timestep. When parameters change, the model adjusts its internal state accordingly. Traditional LSTMs also have memory, but Mamba's selective state-space formulation is more efficient and expressive, as evidenced by our ablation study (3.18\% vs 3.29\% for GNN+LSTM).
+
+\subsection{When Graph Mamba Excels}
+
+Our results demonstrate that Graph Mamba particularly excels when:
+
+\begin{itemize}
+\item \textbf{Parameters vary frequently}: IAUKF's assumption of near-constant parameters breaks down. Graph Mamba has learned to expect and track variations.
+
+\item \textbf{Fast adaptation is needed}: With 1--2 timestep adaptation vs 40+ for IAUKF, Graph Mamba enables rapid response to faults and anomalies.
+
+\item \textbf{Training data is available}: Graph Mamba requires historical data for training (800 episodes in our case). If such data cannot be generated or collected, model-based methods may be preferable.
+
+\item \textbf{Topology is known and fixed}: GNN relies on knowing the network structure. For networks with frequent topology changes (e.g., reconfiguration), the model may need retraining or adaptation.
+\end{itemize}
+
+\subsection{Limitations and Future Work}
+
+While our results are promising, several limitations should be acknowledged:
+
+\subsubsection{Training Data Requirements}
+Graph Mamba requires substantial training data. We generated 800 synthetic episodes ($\sim$160,000 timesteps). In practice, real historical data may be limited, and simulated data may not fully capture real-world complexities (e.g., modeling errors, unmodeled dynamics, cyber attacks). Future work should investigate:
+
+\begin{itemize}
+\item \textbf{Transfer learning}: Pre-train on simulated data, fine-tune on real data.
+\item \textbf{Domain adaptation}: Techniques to bridge the simulation-reality gap.
+\item \textbf{Few-shot learning}: Methods to learn from limited real-world data.
+\end{itemize}
+
+\subsubsection{Generalization to New Topologies}
+Our model is trained on a specific network (IEEE 33-bus) and target line (3--4). Generalizing to different networks or multiple lines simultaneously requires either:
+
+\begin{itemize}
+\item \textbf{Per-line models}: Train separate models for each line of interest.
+\item \textbf{Multi-task learning}: Single model that estimates parameters for multiple lines, sharing representations.
+\item \textbf{Meta-learning}: Learn to quickly adapt to new networks with minimal data.
+\end{itemize}
+
+\subsubsection{Scalability}
+Our experiments used a 33-bus distribution system. Scaling to larger transmission networks (hundreds or thousands of buses) poses computational challenges. However, GNNs and Mamba are inherently scalable:
+
+\begin{itemize}
+\item \textbf{GNN complexity}: $\mathcal{O}(|\mathcal{E}| \cdot d)$ where $|\mathcal{E}|$ is number of edges and $d$ is feature dimension. Power grids are sparse, so this scales well.
+\item \textbf{Mamba complexity}: $\mathcal{O}(T \cdot d^2)$ where $T$ is sequence length. Linear in $T$, more efficient than Transformers' $\mathcal{O}(T^2)$.
+\end{itemize}
+
+Future work should validate performance on larger systems (e.g., IEEE 123-bus, IEEE 8500-node).
+
+\subsubsection{Uncertainty Quantification}
+Our current model provides point estimates. For operational decision-making, uncertainty quantification is valuable. Possible extensions include:
+
+\begin{itemize}
+\item \textbf{Probabilistic predictions}: Modify output layer to predict mean and variance (e.g., Gaussian output).
+\item \textbf{Ensemble methods}: Train multiple models with different initializations, use ensemble variance as uncertainty measure.
+\item \textbf{Bayesian neural networks}: Incorporate weight uncertainty through variational inference.
+\end{itemize}
+
+\subsubsection{Physics-Informed Learning}
+While our model is purely data-driven, incorporating physics constraints could improve sample efficiency and physical consistency. For example:
+
+\begin{itemize}
+\item \textbf{Physics-informed loss}: Add power flow constraint violation penalty to loss function.
+\item \textbf{Hybrid models}: Combine learned components with physics-based constraints.
+\item \textbf{Differentiable physics}: Embed power flow equations as differentiable layers.
+\end{itemize}
+
+\subsection{Practical Deployment Considerations}
+
+\subsubsection{Real-Time Implementation}
+With 10ms inference time, Graph Mamba is suitable for real-time applications. Typical SCADA systems have 2--4 second update rates, and PMUs provide measurements at 30--60 Hz. Graph Mamba can easily handle these rates, with headroom for multiple lines or buses.
+
+\subsubsection{Hardware Requirements}
+Our timing results are on NVIDIA RTX 4090 GPU. For deployment:
+
+\begin{itemize}
+\item \textbf{GPU acceleration}: Recommended for large-scale systems or high-frequency updates.
+\item \textbf{CPU inference}: Smaller networks (e.g., 33-bus) can run on CPU with $\sim$50--100ms inference, still acceptable for many applications.
+\item \textbf{Edge deployment}: Model quantization and pruning can reduce size for edge devices.
+\end{itemize}
+
+\subsubsection{Integration with Existing Systems}
+Graph Mamba can be integrated into existing Energy Management Systems (EMS) as a parameter estimation module, providing updated impedance values to downstream applications (state estimation, optimal power flow, contingency analysis).
+
+\subsection{Broader Impact}
+
+Accurate, adaptive parameter estimation has implications beyond the immediate task:
+
+\begin{itemize}
+\item \textbf{Reliability}: Improved state estimation leads to better situational awareness and faster response to abnormal conditions.
+
+\item \textbf{Efficiency}: Updated parameters enable more accurate optimal power flow solutions, reducing losses and costs.
+
+\item \textbf{Asset management}: Tracking parameter drift over time identifies aging equipment, enabling predictive maintenance and preventing failures.
+
+\item \textbf{Grid modernization}: As grids become more dynamic (DERs, EVs, demand response), adaptive estimation becomes increasingly critical. Data-driven methods like Graph Mamba are well-positioned for this future.
+\end{itemize}
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+This paper introduced Graph Mamba, a novel deep learning architecture for power grid parameter estimation that combines Graph Neural Networks for spatial topology awareness with Mamba state-space models for efficient temporal processing. Through comprehensive three-phase experiments on the IEEE 33-bus distribution system, we demonstrated that Graph Mamba achieves 65\% better accuracy than the state-of-the-art Improved Adaptive Unscented Kalman Filter (IAUKF) on time-varying parameter estimation, with 3$\times$ lower variance, 5$\times$ faster inference, and 20$\times$ faster adaptation to parameter changes.
+
+\subsection{Key Contributions}
+
+\begin{enumerate}
+\item \textbf{Novel architecture}: First application of Graph Mamba to power systems, uniquely combining spatial (GNN) and temporal (Mamba) learning for joint state and parameter estimation.
+
+\item \textbf{Strong empirical results}: 3.18\% error on resistance and 3.06\% on reactance, compared to IAUKF's 9.13\% and 8.61\%, with significantly lower variance ($\pm$2.7\% vs $\pm$9.2\%).
+
+\item \textbf{Rigorous validation}: Three-phase experimental design that (1) reproduces baseline results, (2) proves the concept, and (3) demonstrates superiority on time-varying parameters.
+
+\item \textbf{Comprehensive analysis}: Ablation study confirms that both GNN and Mamba components are essential; statistical analysis shows 2.3$\times$ higher reliability; computational analysis demonstrates practical feasibility.
+
+\item \textbf{End-to-end learning}: Unlike IAUKF's manual tuning of multiple covariance matrices and hyperparameters, Graph Mamba learns all parameters automatically through backpropagation.
+\end{enumerate}
+
+\subsection{Implications}
+
+Our results establish that data-driven, spatial-temporal deep learning can significantly outperform traditional model-based filtering methods for power grid parameter estimation, especially when parameters vary over time. With only 62,346 parameters and 10ms inference time, Graph Mamba is practical for real-time deployment. The approach requires no manual tuning, adapts quickly to changes, and provides reliable estimates suitable for operational use.
+
+\subsection{Future Directions}
+
+Promising directions for future work include: (1) extending to larger transmission networks, (2) incorporating uncertainty quantification, (3) developing transfer learning approaches to reduce training data requirements, (4) exploring physics-informed learning to improve sample efficiency, and (5) validating on real-world data from utility operations.
+
+As power grids become increasingly dynamic with distributed energy resources and renewable integration, the need for adaptive, accurate parameter estimation will only grow. Graph Mamba represents a significant step toward data-driven, AI-enabled grid monitoring that can meet these emerging challenges.
+
+\subsection{Availability}
+
+Code, trained models, and experimental data will be made publicly available upon publication to facilitate reproducibility and enable future research.
+
+\vspace{0.5cm}
+
+\noindent\textbf{Acknowledgments}: This work was supported by [funding sources]. The authors thank [collaborators] for helpful discussions.
