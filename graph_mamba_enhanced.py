@@ -42,19 +42,15 @@ class DropPath(nn.Module):
 
 
 class FeatureNormalizer(nn.Module):
-    """Learnable feature normalization with instance norm."""
+    """Learnable feature normalization."""
     def __init__(self, num_features):
         super().__init__()
-        self.norm = nn.InstanceNorm1d(num_features, affine=True)
+        self.scale = nn.Parameter(torch.ones(num_features))
+        self.shift = nn.Parameter(torch.zeros(num_features))
 
     def forward(self, x):
-        # x: [Batch, Time, Nodes, Features]
-        if x.dim() == 4:
-            b, t, n, f = x.shape
-            x = x.view(b * t * n, f)
-            x = self.norm(x)
-            x = x.view(b, t, n, f)
-        return x
+        # x: [Batch, Time, Nodes, Features] or any shape ending in Features
+        return x * self.scale + self.shift
 
 
 class EnhancedGraphEncoder(nn.Module):
