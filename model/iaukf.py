@@ -63,13 +63,18 @@ class IAUKF:
         # 2. Propagate through State Transition
         self.sigmas_f = np.array([self.sys.state_transition(s) for s in sigmas])
 
-        # 3. Predict Mean and Covariance
+        # 3. Predict Mean
         self.x_pred = np.dot(self.Wm, self.sigmas_f)
-        self.P_pred = np.zeros((self.n, self.n))
+        
+        # 4. Compute sigma point covariance (before adding Q)
+        # This is needed for NSE update, so store it
+        self.sigma_cov = np.zeros((self.n, self.n))
         for i in range(2*self.n + 1):
             diff = self.sigmas_f[i] - self.x_pred
-            self.P_pred += self.Wc[i] * np.outer(diff, diff)
-        self.P_pred += self.Q
+            self.sigma_cov += self.Wc[i] * np.outer(diff, diff)
+        
+        # 5. Prediction covariance (add Q)
+        self.P_pred = self.sigma_cov + self.Q
 
         # Ensure symmetry and positive definiteness
         self.P_pred = (self.P_pred + self.P_pred.T) / 2
@@ -164,7 +169,7 @@ class IAUKF:
         Implements Eq 17 & 18 from Wang et al. (2022) - EXACT formula
         Q_{k+1} = (1-d_k)Q_k + d_k * [K*epsilon*epsilon^T*K^T + P_k - sigma_cov]
         
-        where sigma_cov = sum(W_i^c * (X_{k|k-1}^(i) - x_{k|k-1})(X_{k|k-1}^(i) - x_{k|k-1})^T)
+        where sigma_cov is computed in predict() and stored as self.sigma_cov
         """
         d_k = (1 - self.b_factor) / (1 - self.b_factor**(self.k_step + 1))
 
@@ -174,14 +179,9 @@ class IAUKF:
         # Term 2: P_k (posterior covariance)
         term2 = self.P
 
-        # Term 3: Sigma point covariance (Eq 17 - exact computation)
-        # This is the sum: sum_{i=0}^{2n} W_i^(c) * (X_{k|k-1}^(i) - x_{k|k-1})(X_{k|k-1}^(i) - x_{k|k-1})^T
-        # Note: self.sigmas_f contains the propagated sigma points X_{k|k-1}^(i)
-        # and self.x_pred is x_{k|k-1}
-        sigma_cov = np.zeros((self.n, self.n))
-        for i in range(2*self.n + 1):
-            diff = self.sigmas_f[i] - self.x_pred
-            sigma_cov += self.Wc[i] * np.outer(diff, diff)
+        # Term 3: Use pre-computed sigma_cov from predict()
+        # This avoids redundant computation and ensures numerical consistency
+        sigma_cov = self.sigma_cov if hasattr(self, 'sigma_cov') else np.zeros((self.n, self.n))
 
         # Exact update from Eq 17
         Q_next = (1 - d_k) * self.Q + d_k * (term1 + term2 - sigma_cov)
@@ -302,11 +302,26 @@ class IAUKFMultiSnapshot:
         self.measurement_buffer = []
     
     def sigma_points(self, x, P):
-        """Generate sigma points for augmented state."""
+        """Generate sigma points for augmented state with robustness."""
+        # Ensure P is symmetric
+        P = (P + P.T) / 2
+        
+        # Ensure P is positive definite for Cholesky
         try:
             L = cholesky((self.n + self.lam) * P, lower=True)
         except np.linalg.LinAlgError:
-            L = cholesky((self.n + self.lam) * (P + np.eye(self.n)*1e-6), lower=True)
+            # Add regularization to make positive definite
+            min_eig = np.min(np.linalg.eigvalsh(P))
+            if min_eig < 0:
+                P = P + np.eye(self.n) * (abs(min_eig) + 1e-6)
+            else:
+                P = P + np.eye(self.n) * 1e-6
+            try:
+                L = cholesky((self.n + self.lam) * P, lower=True)
+            except np.linalg.LinAlgError:
+                # Final fallback: use diagonal
+                P = np.diag(np.maximum(np.diag(P), 1e-6))
+                L = cholesky((self.n + self.lam) * P, lower=True)
         
         sigmas = np.zeros((2*self.n + 1, self.n))
         sigmas[0] = x
@@ -367,9 +382,19 @@ class IAUKFMultiSnapshot:
             # Single measurement - add to buffer
             self.measurement_buffer.append(measurements)
             if len(self.measurement_buffer) < self.num_snapshots:
-                # Not enough snapshots yet - just update state
+                # Not enough snapshots yet - update state prediction only
+                # Still perform minimal NSE update for consistency
                 self.x = self.x_pred
                 self.P = self.P_pred
+                
+                # Perform a simplified NSE update to maintain consistency
+                # Use identity residual since we're not doing full update
+                dummy_K = np.zeros((self.n, len(measurements)))
+                dummy_residual = np.zeros(len(measurements))
+                dummy_S = self.R_single
+                self.adaptive_noise_update(dummy_residual, dummy_K, dummy_S)
+                self.k_step += 1
+                
                 return self.x
             # Keep only last num_snapshots measurements
             self.measurement_buffer = self.measurement_buffer[-self.num_snapshots:]

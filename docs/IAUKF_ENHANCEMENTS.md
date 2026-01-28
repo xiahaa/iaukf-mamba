@@ -126,9 +126,9 @@ For end branches (e.g., 21-22) with multi-snapshot:
 ## Files Modified
 
 1. **model/iaukf.py**
-   - Lines 30-56: Enhanced `sigma_points()` with better robustness
-   - Lines 149-207: Exact NSE implementation (Eq. 17 & 18)
-   - Lines 210-475: New `IAUKFMultiSnapshot` class
+   - Lines 30-57: Enhanced `sigma_points()` with better robustness
+   - Lines 167-207: Exact NSE implementation (Eq. 17 & 18)
+   - Lines 217-505: New `IAUKFMultiSnapshot` class
 
 2. **New Test Files**
    - `experiments/test_code_structure.py`: Validates code structure (PASSED ✓)

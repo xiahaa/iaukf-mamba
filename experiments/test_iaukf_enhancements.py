@@ -26,7 +26,7 @@ from model.iaukf import IAUKF, IAUKFMultiSnapshot
 
 def test_single_snapshot_nse():
     """
-    Test 1: Single-snapshot IAUKF with fixed NSE on branch 3-4.
+    Test 1: Single-snapshot IAUKF with Exact NSE on branch 3-4.
     Expected: R error ~0.18%, X error ~1.55%
     """
     print("=" * 80)
@@ -298,6 +298,11 @@ def main():
     print("  - Single snapshot: R ~0.18%, X ~1.55%")
     print("  - Multi-snapshot: R ~0.13%, X ~0.09% (better accuracy)")
     
+    # Get true values for plotting
+    sim_temp = PowerSystemSimulation(steps=1)
+    r_true = sim_temp.r_true
+    x_true = sim_temp.x_true
+    
     try:
         # Test 1: Single snapshot with exact NSE
         r1, x1, r_err1, x_err1 = test_single_snapshot_nse()
@@ -362,9 +367,4 @@ def main():
 
 
 if __name__ == '__main__':
-    # Need to get r_true, x_true from simulation
-    sim = PowerSystemSimulation(steps=1)
-    r_true = sim.net.line.at[3, 'r_ohm_per_km']
-    x_true = sim.net.line.at[3, 'x_ohm_per_km']
-    
     exit(main())
