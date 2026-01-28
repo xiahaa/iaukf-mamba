@@ -54,3 +54,9 @@ Thumbs.db
 /outputs/
 *.png
 *.pdf
+
+
+test/
+docs/nouse/
+docs/*_log.txt
+docs/phase3/*_log.txt
