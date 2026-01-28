@@ -82,9 +82,9 @@ class IAUKF:
         self.P_pred += np.eye(self.n) * 1e-9
 
     def update(self, z):
-        # 1. Propagate Sigma Points through Measurement Function
-        # Reuse predicted sigma points instead of regenerating
-        sigmas_pred = self.sigmas_f  # Use already propagated sigma points
+        # 1. Generate NEW Sigma Points from predicted state (Equation 7)
+        # According to the paper, correction stage needs NEW sigma points from x_pred and P_pred
+        sigmas_pred = self.sigma_points(self.x_pred, self.P_pred)
 
         Z_sigmas = []
         failed_count = 0
@@ -403,9 +403,13 @@ class IAUKFMultiSnapshot:
         # Create augmented measurement vector (Eq 34)
         z = np.concatenate(measurements)
         
+        # Generate NEW sigma points from predicted state (Eq 7)
+        # According to the paper, correction stage needs NEW sigma points from x_pred and P_pred
+        sigmas_pred = self.sigma_points(self.x_pred, self.P_pred)
+        
         # Propagate sigma points through measurement function (Eq 36)
         Z_sigmas = []
-        for s in self.sigmas_f:
+        for s in sigmas_pred:
             # Extract snapshots and parameters
             h_list = []
             params = s[-self.n_params:]
@@ -434,7 +438,7 @@ class IAUKFMultiSnapshot:
         # Cross covariance
         Pxz = np.zeros((self.n, len(z)))
         for i in range(2*self.n + 1):
-            diff_x = self.sigmas_f[i] - self.x_pred
+            diff_x = sigmas_pred[i] - self.x_pred
             diff_z = Z_sigmas[i] - z_pred
             Pxz += self.Wc[i] * np.outer(diff_x, diff_z)
         
