@@ -17,6 +17,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
+import copy
 import matplotlib.pyplot as plt
 import pandapower as pp
 from model.simulation import PowerSystemSimulation
@@ -103,7 +104,7 @@ def test_single_snapshot_nse():
     
     # Create model
     model = DistributionSystemModelHolt(
-        sim.net.copy(), target_branch, sim.pmu_buses,
+        copy.deepcopy(sim.net), target_branch, sim.pmu_buses,
         alpha_H=0.8, beta_H=0.5
     )
     
@@ -233,7 +234,7 @@ def test_multi_snapshot():
     R[n_scada+len(sim.pmu_buses):, n_scada+len(sim.pmu_buses):] *= 0.002**2
     
     model = DistributionSystemModelHolt(
-        sim.net.copy(), target_branch, sim.pmu_buses,
+        copy.deepcopy(sim.net), target_branch, sim.pmu_buses,
         alpha_H=0.8, beta_H=0.5
     )
     
