@@ -29,12 +29,25 @@ class IAUKF:
 
     def sigma_points(self, x, P):
         """Generates Sigma Points."""
+        # Ensure P is symmetric
+        P = (P + P.T) / 2
+        
         # Ensure P is positive definite for Cholesky
         try:
             L = cholesky((self.n + self.lam) * P, lower=True)
         except np.linalg.LinAlgError:
-            # Fallback for numerical stability
-            L = cholesky((self.n + self.lam) * (P + np.eye(self.n)*1e-6), lower=True)
+            # Add regularization to make positive definite
+            min_eig = np.min(np.linalg.eigvalsh(P))
+            if min_eig < 0:
+                P = P + np.eye(self.n) * (abs(min_eig) + 1e-6)
+            else:
+                P = P + np.eye(self.n) * 1e-6
+            try:
+                L = cholesky((self.n + self.lam) * P, lower=True)
+            except np.linalg.LinAlgError:
+                # Final fallback: use diagonal
+                P = np.diag(np.maximum(np.diag(P), 1e-6))
+                L = cholesky((self.n + self.lam) * P, lower=True)
 
         sigmas = np.zeros((2*self.n + 1, self.n))
         sigmas[0] = x
