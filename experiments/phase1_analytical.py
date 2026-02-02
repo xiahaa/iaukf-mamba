@@ -1,21 +1,14 @@
 """
-Phase 1: IAUKF Validation with Bug Fix Applied
+Phase 1: IAUKF Validation with ANALYTICAL Measurement Model
 
-This script validates the corrected IAUKF implementation after fixing the critical
-bug in sigma point generation (Equation 7 correction stage).
+This uses the correct analytical measurement function h(x) from paper's Eq. 21,
+instead of running power flow for each sigma point (which was wrong).
 
-Configuration:
-- Initial parameters: 0.01 (very small, as in paper)
-- UKF parameters: alpha=0.001, kappa=0, beta=2 (paper's values)
-- Q0 = 1e-6 * I (paper's value)
-- b_factor = 0.98 (optimized after bug fix)
-- State transition: Identity (stable) or Holt's smoothing
-- 200 time steps with post-convergence averaging
+The measurement function should be:
+h(x) = f(V, δ, R, X) → measurements
 
-Expected Results (after bug fix):
-- R error: ~0.5-1.5% (paper: 0.18%)
-- X error: ~0.3-1.5% (paper: 1.55%)
-- Paper-level accuracy achieved!
+NOT:
+h(x) = run_powerflow(network_with_params) → measurements
 """
 import sys
 import os
@@ -25,23 +18,23 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pandapower as pp
 from model.simulation import PowerSystemSimulation
-from model.models_holt import DistributionSystemModelHolt
+from model.models_analytical import AnalyticalMeasurementModel, AnalyticalMeasurementModelHolt
 from model.iaukf import IAUKF
 
 
-def phase1_exact_paper_reproduction(steps=200, use_holt=True):
+def run_analytical_validation(steps=200, use_holt=False):
     """
-    Exact reproduction of paper's experiment on IEEE 33-bus branch 3-4.
+    Validate IAUKF with analytical measurement model.
     """
     print("=" * 70)
-    print("PHASE 1 REFINED: Exact Paper Reproduction")
+    print("PHASE 1: IAUKF with ANALYTICAL Measurement Model")
     print("=" * 70)
     print(f"\nConfiguration:")
     print(f"  - System: IEEE 33-bus")
     print(f"  - Target: Branch 3-4")
     print(f"  - Steps: {steps}")
     print(f"  - State transition: {'Holt smoothing' if use_holt else 'Identity'}")
-    print(f"  - Initial params: 0.01 (very small, as in paper)")
+    print(f"  - Measurement model: ANALYTICAL (Eq. 21)")
 
     # Generate simulation data
     print("\n[1] Generating simulation data (constant loads)...")
@@ -91,20 +84,19 @@ def phase1_exact_paper_reproduction(steps=200, use_holt=True):
     print(f"✓ Generated {steps} snapshots")
     print(f"  True: R={sim.r_true:.4f}, X={sim.x_true:.4f}")
 
-    # Setup IAUKF with paper's parameters
-    print("\n[2] Setting up IAUKF (paper's parameters)...")
+    # Setup IAUKF with ANALYTICAL model
+    print("\n[2] Setting up IAUKF with ANALYTICAL measurement model...")
 
     if use_holt:
-        model = DistributionSystemModelHolt(sim.net, sim.line_idx, sim.pmu_buses,
-                                           alpha_H=0.8, beta_H=0.5)
+        model = AnalyticalMeasurementModelHolt(sim.net, sim.line_idx, sim.pmu_buses,
+                                               alpha_H=0.8, beta_H=0.5)
     else:
-        from model.models import DistributionSystemModel
-        model = DistributionSystemModel(sim.net, sim.line_idx, sim.pmu_buses)
+        model = AnalyticalMeasurementModel(sim.net, sim.line_idx, sim.pmu_buses)
 
-    # Initial state as in paper
+    # Initial state
     x0_v = np.ones(sim.net.bus.shape[0])
     x0_d = np.zeros(sim.net.bus.shape[0])
-    x0_r = 0.01  # Paper uses 0.01 or 0.02 (very small)
+    x0_r = 0.01  # Paper uses small initial values
     x0_x = 0.01
     x0 = np.concatenate([x0_v, x0_d, [x0_r, x0_x]])
 
@@ -112,33 +104,27 @@ def phase1_exact_paper_reproduction(steps=200, use_holt=True):
     print(f"  Initial error: R={abs(x0_r-sim.r_true)/sim.r_true*100:.1f}%, "
           f"X={abs(x0_x-sim.x_true)/sim.x_true*100:.1f}%")
 
-    # Covariances - OPTIMIZED AFTER BUG FIX
-    P0 = np.eye(len(x0)) * 0.01  # Moderate for voltages
-    P0[-2, -2] = 0.1  # Moderate for R
-    P0[-1, -1] = 0.1  # Moderate for X
+    # Covariances
+    P0 = np.eye(len(x0)) * 0.01
+    P0[-2, -2] = 0.1
+    P0[-1, -1] = 0.1
 
-    Q0 = np.eye(len(x0)) * 1e-6  # Paper's exact value
-    Q0[-2, -2] = 1e-6  # Paper's exact value for parameters
-    Q0[-1, -1] = 1e-6
+    Q0 = np.eye(len(x0)) * 1e-6
 
     R_diag = np.concatenate([
-        np.full(33, 0.02**2),
-        np.full(33, 0.02**2),
-        np.full(33, 0.02**2),
-        np.full(12, 0.005**2),
-        np.full(12, 0.002**2)
+        np.full(33, 0.02**2),   # P injection
+        np.full(33, 0.02**2),   # Q injection
+        np.full(33, 0.02**2),   # V SCADA
+        np.full(12, 0.005**2),  # V PMU
+        np.full(12, 0.002**2)   # Theta PMU
     ])
     R_cov = np.diag(R_diag)
 
-    # Create IAUKF (already has paper's UKF parameters: alpha=0.001, beta=2, kappa=0)
     iaukf = IAUKF(model, x0, P0, Q0, R_cov)
-
-    # Optimized b_factor after bug fix (0.98 gives best results)
-    iaukf.b_factor = 0.98  # Optimal balance of adaptation and stability
+    iaukf.b_factor = 0.98  # Slightly higher for more stability (paper uses 0.96)
 
     print(f"  UKF params: alpha={iaukf.alpha}, beta={iaukf.beta}, kappa={iaukf.kappa}")
-    print(f"  NSE b_factor: {iaukf.b_factor} (optimized after bug fix)")
-    print(f"  Note: Bug fix applied - Eq.7 sigma points now generated correctly")
+    print(f"  NSE b_factor: {iaukf.b_factor}")
 
     # Run IAUKF
     print("\n[3] Running IAUKF...")
@@ -169,7 +155,7 @@ def phase1_exact_paper_reproduction(steps=200, use_holt=True):
             print(f"  Step {t:3d}: R={r_est:.6f} (err={r_err_pct:5.2f}%), "
                   f"X={x_est_param:.6f} (err={x_err_pct:5.2f}%)")
 
-    # Paper's convergence criterion: |p_k - p_{k-1}| <= 0.001
+    # Paper's convergence criterion
     print("\n[4] Checking convergence (|p_k - p_{k-1}| <= 0.001)...")
 
     convergence_threshold = 0.001
@@ -187,7 +173,7 @@ def phase1_exact_paper_reproduction(steps=200, use_holt=True):
     print(f"  R converges at step: {r_converged_step}")
     print(f"  X converges at step: {x_converged_step}")
 
-    # Paper's final averaging (Eq. 40): average from convergence to end
+    # Post-convergence averaging (Eq. 40)
     if r_converged_step:
         r_final = np.mean(history_r[r_converged_step:])
     else:
@@ -201,39 +187,38 @@ def phase1_exact_paper_reproduction(steps=200, use_holt=True):
     r_final_err = abs(r_final - sim.r_true) / sim.r_true * 100
     x_final_err = abs(x_final - sim.x_true) / sim.x_true * 100
 
-    print(f"\n[5] Final results (after averaging)...")
+    # Check oscillation
+    r_std_last20 = np.std(history_r[-20:])
+    x_std_last20 = np.std(history_x[-20:])
+
+    print(f"\n[5] Results...")
     print(f"  R_final = {r_final:.6f} (true={sim.r_true:.4f}, error={r_final_err:.2f}%)")
     print(f"  X_final = {x_final:.6f} (true={sim.x_true:.4f}, error={x_final_err:.2f}%)")
+    print(f"  Oscillation (last 20 steps std): R={r_std_last20:.6f}, X={x_std_last20:.6f}")
 
     # Compare with paper
     print(f"\n{'='*70}")
-    print("COMPARISON WITH PAPER (After Bug Fix)")
+    print("COMPARISON WITH PAPER")
     print('='*70)
     print(f"  Paper's results (branch 3-4):")
     print(f"    R error: 0.18%")
     print(f"    X error: 1.55%")
-    print(f"\n  Our results (bug fixed):")
+    print(f"\n  Our results:")
     print(f"    R error: {r_final_err:.2f}%")
     print(f"    X error: {x_final_err:.2f}%")
+    print(f"    R oscillation: {r_std_last20:.6f}")
+    print(f"    X oscillation: {x_std_last20:.6f}")
 
-    # Calculate improvement indicator
-    x_better = x_final_err < 1.55
-    r_close = r_final_err < 2.0
+    # Evaluate
+    converged_well = r_std_last20 < 0.01 and x_std_last20 < 0.01
+    accurate = r_final_err < 2.0 and x_final_err < 3.0
 
-    if r_final_err < 1.5 and x_final_err < 2.0:
-        print(f"\n  ✓✓✓ EXCELLENT: Paper-level accuracy achieved! ✓✓✓")
-        if x_better:
-            print(f"  ✓✓ BONUS: X error even better than paper!")
-        success = True
-    elif r_final_err < 3.0 and x_final_err < 3.0:
-        print(f"\n  ✓✓ VERY GOOD: Close to paper's results")
-        success = True
-    elif r_final_err < 5.0 and x_final_err < 5.0:
-        print(f"\n  ✓ GOOD: Acceptable accuracy")
-        success = True
+    if converged_well and accurate:
+        print(f"\n  ✓✓✓ EXCELLENT: Converged and accurate! ✓✓✓")
+    elif accurate:
+        print(f"\n  ✓ Good accuracy, but still oscillating")
     else:
-        print(f"\n  ⚠ NEEDS INVESTIGATION: Results differ significantly")
-        success = False
+        print(f"\n  ⚠ Needs investigation")
 
     # Visualization
     print(f"\n[6] Generating plots...")
@@ -248,10 +233,9 @@ def phase1_exact_paper_reproduction(steps=200, use_holt=True):
         axes[0, 0].axvline(r_converged_step, color='orange', linestyle='--', alpha=0.5, label='Converged')
     axes[0, 0].set_xlabel('Time Step')
     axes[0, 0].set_ylabel('R (Ohm/km)')
-    axes[0, 0].set_title('Resistance Estimation', fontweight='bold')
+    axes[0, 0].set_title('Resistance Estimation (Analytical Model)', fontweight='bold')
     axes[0, 0].legend()
-    # set ylim to 0.0 to 0.5
-    axes[0, 0].set_ylim(0.0, 0.5)
+    axes[0, 0].set_ylim(0.0, 0.6)
     axes[0, 0].grid(True, alpha=0.3)
 
     # X estimation
@@ -262,7 +246,7 @@ def phase1_exact_paper_reproduction(steps=200, use_holt=True):
         axes[0, 1].axvline(x_converged_step, color='orange', linestyle='--', alpha=0.5, label='Converged')
     axes[0, 1].set_xlabel('Time Step')
     axes[0, 1].set_ylabel('X (Ohm/km)')
-    axes[0, 1].set_title('Reactance Estimation', fontweight='bold')
+    axes[0, 1].set_title('Reactance Estimation (Analytical Model)', fontweight='bold')
     axes[0, 1].legend()
     axes[0, 1].grid(True, alpha=0.3)
 
@@ -287,49 +271,32 @@ def phase1_exact_paper_reproduction(steps=200, use_holt=True):
     axes[1, 1].grid(True, alpha=0.3)
 
     plt.tight_layout()
-    filename = f'tmp/phase1_exact_paper_{"holt" if use_holt else "identity"}.png'
+    filename = f'tmp/phase1_analytical_{"holt" if use_holt else "identity"}.png'
     plt.savefig(filename, dpi=150, bbox_inches='tight')
     print(f"✓ Saved: {filename}")
     plt.close()
 
     return {
-        'success': success,
         'r_final': r_final,
         'x_final': x_final,
         'r_error': r_final_err,
         'x_error': x_final_err,
-        'r_converged_step': r_converged_step,
-        'x_converged_step': x_converged_step,
+        'r_std': r_std_last20,
+        'x_std': x_std_last20,
         'history_r': history_r,
         'history_x': history_x,
     }
 
 
 if __name__ == "__main__":
-    # Skip Holt's for now (causes numerical issues with very small initial params)
-    # Use identity transition which works well
-    print("\nTesting with identity transition (stable and accurate)...")
-    results_identity = phase1_exact_paper_reproduction(steps=200, use_holt=False)
+    print("\nTesting with ANALYTICAL measurement model (identity transition)...")
+    results = run_analytical_validation(steps=200, use_holt=False)
 
     print("\n" + "=" * 70)
-    print("VALIDATION SUMMARY")
+    print("SUMMARY")
     print("=" * 70)
-    print(f"\nOur implementation:")
-    print(f"  R error: {results_identity['r_error']:.2f}%")
-    print(f"  X error: {results_identity['x_error']:.2f}%")
-    print(f"\nPaper's results (branch 3-4):")
-    print(f"  R error: 0.18%")
-    print(f"  X error: 1.55%")
-
-    if results_identity['success']:
-        print(f"\n✓✓✓ PHASE 1 COMPLETE - IAUKF VALIDATED ✓✓✓")
-        print(f"\nBug Fix Summary:")
-        print(f"  - Fixed: Sigma point generation in Eq.7 (correction stage)")
-        print(f"  - Optimized: b_factor=0.98, Q0=1e-6")
-        print(f"  - Result: Paper-level accuracy achieved!")
-        print(f"\nOur implementation achieves comparable/better accuracy than paper.")
-        print(f"Minor differences are due to:")
-        print(f"  - Different random seeds")
-        print(f"  - Numerical precision variations")
-        print(f"  - State transition choice (identity vs Holt's)")
-        print(f"\n✓ Ready for Phase 2: Train Graph Mamba!")
+    print(f"\nAnalytical model results:")
+    print(f"  R error: {results['r_error']:.2f}%")
+    print(f"  X error: {results['x_error']:.2f}%")
+    print(f"  R oscillation (std): {results['r_std']:.6f}")
+    print(f"  X oscillation (std): {results['x_std']:.6f}")

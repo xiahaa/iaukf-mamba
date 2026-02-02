@@ -20,9 +20,9 @@ class DistributionSystemModelHolt:
         self.beta_H = beta_H
 
         # Initialize Holt's smoothing state variables
-        self.S_prev = None  # Level
-        self.b_prev = None  # Trend
-        self.x_prev = None  # Previous state
+        self.S_prev = None  # Level (S_{k-2} at call time)
+        self.b_prev = None  # Trend (b_{k-2} at call time)
+        self.x_pred_prev = None  # Previous one-step prediction (x_{k-1|k-2})
 
         # Store original parameters
         self.original_r = self.net.line.at[self.target_line_idx, 'r_ohm_per_km']
@@ -43,15 +43,18 @@ class DistributionSystemModelHolt:
         x_states = x[:2*self.num_buses]  # Voltages and angles
         x_params = x[2*self.num_buses:]   # Parameters
 
-        # First call: initialize
+        # First call: initialize with identity prediction
         if self.S_prev is None:
             self.S_prev = x_states.copy()
             self.b_prev = np.zeros_like(x_states)
-            self.x_prev = x_states.copy()
+            # Use current state as the previous one-step prediction
+            self.x_pred_prev = x_states.copy()
             return x  # Identity for first step
 
-        # Holt's smoothing for voltage/angle states
-        S_new = self.alpha_H * self.x_prev + (1 - self.alpha_H) * self.S_prev
+        # Holt's smoothing for voltage/angle states (Eq. 19)
+        # S_{k-1} = alpha * x_{k-1} + (1-alpha) * x_{k-1|k-2}
+        S_new = self.alpha_H * x_states + (1 - self.alpha_H) * self.x_pred_prev
+        # b_{k-1} = beta * (S_{k-1} - S_{k-2}) + (1-beta) * b_{k-2}
         b_new = self.beta_H * (S_new - self.S_prev) + (1 - self.beta_H) * self.b_prev
 
         x_states_pred = S_new + b_new
@@ -59,7 +62,8 @@ class DistributionSystemModelHolt:
         # Update history
         self.S_prev = S_new
         self.b_prev = b_new
-        self.x_prev = x_states.copy()
+        # Store current prediction for next call
+        self.x_pred_prev = x_states_pred.copy()
 
         # Parameters remain constant
         return np.concatenate([x_states_pred, x_params])
