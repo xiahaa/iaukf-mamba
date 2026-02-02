@@ -154,17 +154,15 @@ class IAUKF:
         d_k = (1 - self.b_factor) / (1 - self.b_factor**(self.k_step + 1))
 
         # Calculate the correction term
-        # Term = K * epsilon * epsilon^T * K^T
+        # term1 = K * epsilon * epsilon^T * K^T
         term1 = np.dot(K, np.dot(np.outer(residual, residual), K.T))
 
-        # Implementing Eq 17 exactly requires the sigma term summation which is P_pred - Q_k.
-        # Let's approximate the Bracket term as: K*e*e^T*K^T + P_posterior - (P_pred - Q_old)
-        # This simplifies to Q_new = Q_old + d_k * (K*e*e^T*K^T + P_posterior - P_pred)
-
-        # Let's use the explicit update:
-        update_term = term1 + self.P - (self.P_pred - self.Q)
-
-        Q_next = (1 - d_k) * self.Q + d_k * update_term
+        # Implementing Eq 17 exactly:
+        # Bracket = K*e*e^T*K^T + P_posterior - (P_pred - Q_old)
+        # So Q_next = (1-d)*Q + d * (term1 + P - P_pred + Q)
+        #           = Q + d * (term1 + P - P_pred)
+        update_term = term1 + self.P - self.P_pred
+        Q_next = self.Q + d_k * update_term
 
         # Make symmetric
         Q_next = (Q_next + Q_next.T) / 2
@@ -174,17 +172,27 @@ class IAUKF:
             cholesky(Q_next)
             self.Q = Q_next
         except np.linalg.LinAlgError:
-            # Try to fix by taking diagonal elements and ensuring positivity
-            Q_diag = np.diag(np.abs(np.diag(Q_next)))
-            # Clip to reasonable range
-            Q_diag = np.clip(Q_diag, 1e-8, 1.0)
+            # Fallback (Eq 18 "otherwise" case):
+            # Q_{k+1} = (1-d_k)Q_k + d_k [ diag(term1) + K * S * K^T ]
 
+            # term2 = K * S * K^T (where S is P_zz)
+            term2 = np.dot(K, np.dot(S, K.T))
+
+            bracket_fallback = np.diag(np.diag(term1)) + term2
+
+            Q_fallback = (1 - d_k) * self.Q + d_k * bracket_fallback
+
+            # Ensure symmetry
+            Q_fallback = (Q_fallback + Q_fallback.T) / 2
+
+            # If still not positive definite, use diagonal trick or inflation
             try:
-                cholesky(Q_diag)
-                self.Q = Q_diag
-            except:
-                # Final fallback: keep old Q with small inflation
-                self.Q = self.Q * 1.01 + np.eye(self.n) * 1e-6
+                cholesky(Q_fallback)
+                self.Q = Q_fallback
+            except np.linalg.LinAlgError:
+                 # Last resort: ensure diagonal is positive
+                Q_diag = np.diag(np.abs(np.diag(Q_fallback)))
+                self.Q = Q_diag + np.eye(self.n) * 1e-6
 
         # Additional safeguard: clip Q values to prevent explosion
         self.Q = np.clip(self.Q, 1e-8, 1.0)

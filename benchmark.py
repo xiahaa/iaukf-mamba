@@ -5,8 +5,8 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
 from simulation import PowerSystemSimulation
-from models import DistributionSystemModel
-from iaukf import IAUKF
+from model.models_holt import DistributionSystemModelHolt as DistributionSystemModel
+from model.iaukf import IAUKF
 from graph_mamba import GraphMambaModel, PhysicsInformedLoss
 import warnings
 import os
