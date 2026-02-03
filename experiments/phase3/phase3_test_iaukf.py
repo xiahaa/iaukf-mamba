@@ -15,9 +15,9 @@ import pickle
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 
-from simulation import PowerSystemSimulation
-from models import DistributionSystemModel
-from iaukf import IAUKF
+from model.simulation import PowerSystemSimulation
+from model.models import DistributionSystemModel
+from model.iaukf import IAUKF
 
 # ========================================
 # Configuration
@@ -46,7 +46,7 @@ with open(os.path.join(DATA_DIR, 'test_data.pkl'), 'rb') as f:
     test_data = pickle.load(f)
 
 print(f"  ✓ Loaded {len(test_data)} test episodes")
-print(f"  Time steps: {config['time_steps']}")
+print(f"  Time steps: {config['steps_per_episode']}")
 print(f"  Change interval: {config['change_interval']}")
 print(f"  Variation: ±{config['param_variation']*100:.0f}%")
 
@@ -56,21 +56,17 @@ print(f"  Variation: ±{config['param_variation']*100:.0f}%")
 
 print("\n[2] Setting up IAUKF...")
 
-sim = PowerSystemSimulation(
-    num_buses=config['num_buses'],
-    target_line_idx=config['target_line_idx'],
-    pmu_buses=config['pmu_buses'],
-    scada_p_noise=config['noise_levels']['scada_p'],
-    scada_q_noise=config['noise_levels']['scada_q'],
-    scada_v_noise=config['noise_levels']['scada_v'],
-    pmu_v_noise=config['noise_levels']['pmu_v'],
-    pmu_theta_noise=config['noise_levels']['pmu_theta']
-)
+# Use default simulation (same as data generation)
+sim = PowerSystemSimulation(steps=config['steps_per_episode'])
+
+# Get PMU buses from simulation
+pmu_buses = sim.pmu_buses
+target_line_idx = sim.line_idx
 
 model = DistributionSystemModel(
     sim.net,
-    config['target_line_idx'],
-    config['pmu_buses']
+    target_line_idx,
+    pmu_buses
 )
 
 print(f"  ✓ Model created")
@@ -117,8 +113,8 @@ def run_iaukf_on_episode(episode, model, verbose=False):
         np.full(num_buses, 0.02**2),  # P
         np.full(num_buses, 0.02**2),  # Q
         np.full(num_buses, 0.02**2),  # V_scada
-        np.full(len(config['pmu_buses']), 0.005**2),  # V_pmu
-        np.full(len(config['pmu_buses']), 0.002**2)   # Theta_pmu
+        np.full(len(pmu_buses), 0.005**2),  # V_pmu
+        np.full(len(pmu_buses), 0.002**2)   # Theta_pmu
     ])
     R_cov = np.diag(R_diag)
 
