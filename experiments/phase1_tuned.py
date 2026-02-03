@@ -19,9 +19,16 @@ from model.models import DistributionSystemModel
 from model.iaukf import IAUKF
 
 
-def phase1_tuned(steps=200):
+def phase1_tuned(steps=300):
     """
-    Tuned IAUKF for smooth convergence.
+    Tuned IAUKF using paper's exact parameters.
+
+    Paper's key parameters:
+    - Q0 = 1e-6 * I (Section V)
+    - b_factor = 0.96 (Section III, Eq 17)
+    - Initial params = 0.01 (small, Section V)
+
+    Target: R error < 1%, X error < 2%
     """
     print("=" * 70)
     print("PHASE 1 TUNED: Smooth Convergence")
@@ -80,21 +87,21 @@ def phase1_tuned(steps=200):
     print(f"  Initial: R={x0_r:.4f} ({abs(x0_r-sim.r_true)/sim.r_true*100:.1f}% error)")
     print(f"           X={x0_x:.4f} ({abs(x0_x-sim.x_true)/sim.x_true*100:.1f}% error)")
 
-    # TUNED Covariances - SMOOTHER VERSION
-    print("\n  Tuning strategy:")
-    print("  - P0: Moderate initial uncertainty")
-    print("  - Q: VERY small for parameters (constant)")
-    print("  - Less aggressive adaptive NSE (b_factor closer to 1)")
+    # Paper's covariances
+    print("\n  Paper's parameters:")
+    print("  - P0: Moderate initial uncertainty (0.01 for states, 0.2 for params)")
+    print("  - Q0 = 1e-6 * I (paper's value)")
+    print("  - b_factor = 0.96 (paper's NSE forgetting factor)")
 
     # Initial covariance
     P0 = np.eye(len(x0)) * 0.01  # Moderate for voltages
     P0[-2, -2] = 0.2  # Moderate for R (trust measurements more)
     P0[-1, -1] = 0.2  # Moderate for X (trust measurements more)
 
-    # Process noise - KEY TUNING FOR SMOOTHNESS
-    Q0 = np.eye(len(x0)) * 1e-9  # Extremely small for voltages
-    Q0[-2, -2] = 1e-8  # Extremely small for R (nearly constant)
-    Q0[-1, -1] = 1e-8  # Extremely small for X (nearly constant)
+    # Process noise - paper's value (Section V)
+    Q0 = np.eye(len(x0)) * 1e-6  # Paper uses 1e-6 * I
+    Q0[-2, -2] = 1e-6  # Paper's value for parameters
+    Q0[-1, -1] = 1e-6
 
     # Measurement noise
     R_diag = np.concatenate([
@@ -109,13 +116,14 @@ def phase1_tuned(steps=200):
     # Create IAUKF
     iaukf = IAUKF(model, x0, P0, Q0, R_cov)
 
-    # Much less aggressive NSE for smoother updates
-    iaukf.b_factor = 0.995  # Was 0.99, now even less aggressive
+    # Paper's NSE forgetting factor (0.95 <= b <= 0.995)
+    # 0.96 is paper's recommended value
+    iaukf.b_factor = 0.96
 
     print(f"\n  Covariance tuning:")
     print(f"    P0 (params): {P0[-2,-2]:.2e}")
     print(f"    Q (params): {Q0[-2,-2]:.2e}")
-    print(f"    NSE b_factor: {iaukf.b_factor}")
+    print(f"    NSE b_factor: {iaukf.b_factor} (paper's value)")
 
     # Run IAUKF
     print("\n[3] Running IAUKF...")
@@ -303,7 +311,7 @@ def phase1_tuned(steps=200):
 
 
 if __name__ == "__main__":
-    results = phase1_tuned(steps=200)
+    results = phase1_tuned(steps=300)
 
     print("\n" + "=" * 70)
     print("FINAL SUMMARY")

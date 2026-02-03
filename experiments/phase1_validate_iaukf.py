@@ -14,15 +14,19 @@ from model.models import DistributionSystemModel
 from model.iaukf import IAUKF
 
 
-def phase1_validate_iaukf(steps=150, save_results=True):
+def phase1_validate_iaukf(steps=300, save_results=True):
     """
     Phase 1: Reproduce paper's IAUKF results.
 
     Scenario:
     - Constant loads (steady-state)
-    - 50% initial parameter error
+    - Small initial parameter values (0.01 as in paper)
     - IEEE 33-bus system
     - SCADA + PMU measurements
+
+    Paper's claimed results (branch 3-4, single snapshot):
+    - R error: 0.18%
+    - X error: 1.55%
     """
     print("=" * 70)
     print("PHASE 1: VALIDATE IAUKF (Reproduce Paper Results)")
@@ -97,10 +101,11 @@ def phase1_validate_iaukf(steps=150, save_results=True):
     model = DistributionSystemModel(sim.net, sim.line_idx, sim.pmu_buses)
 
     # Initial state: [V, delta, R, X]
+    # Paper uses small initial values (0.01 or 0.02) - see Section V
     x0_v = np.ones(sim.net.bus.shape[0])  # Flat start for voltages
     x0_d = np.zeros(sim.net.bus.shape[0])  # Zero angles
-    x0_r = sim.r_true * 0.5  # 50% initial error (as in paper)
-    x0_x = sim.x_true * 0.5  # 50% initial error
+    x0_r = 0.01  # Small initial value as in paper
+    x0_x = 0.01  # Small initial value as in paper
 
     x0 = np.concatenate([x0_v, x0_d, [x0_r, x0_x]])
 
@@ -108,13 +113,14 @@ def phase1_validate_iaukf(steps=150, save_results=True):
     print(f"  Initial guess: R={x0_r:.4f} ({abs(x0_r-sim.r_true)/sim.r_true*100:.1f}% error)")
     print(f"                 X={x0_x:.4f} ({abs(x0_x-sim.x_true)/sim.x_true*100:.1f}% error)")
 
-    # Covariance matrices (tuning parameters)
+    # Covariance matrices - paper's values
     P0 = np.eye(len(x0)) * 0.01
-    P0[-2, -2] = 0.1  # Larger uncertainty for R
-    P0[-1, -1] = 0.1  # Larger uncertainty for X
+    P0[-2, -2] = 0.1  # Moderate uncertainty for R
+    P0[-1, -1] = 0.1  # Moderate uncertainty for X
 
-    Q0 = np.eye(len(x0)) * 1e-8  # Very small for steady-state
-    Q0[-2, -2] = 1e-6  # Slightly larger for parameters
+    # Paper uses Q0 = 1e-6 * I (see Section V)
+    Q0 = np.eye(len(x0)) * 1e-6
+    Q0[-2, -2] = 1e-6  # Paper's value for parameters
     Q0[-1, -1] = 1e-6
 
     # Measurement noise covariance
@@ -135,6 +141,7 @@ def phase1_validate_iaukf(steps=150, save_results=True):
     print("\n[Step 3] Running IAUKF...")
 
     iaukf = IAUKF(model, x0, P0, Q0, R_cov)
+    iaukf.b_factor = 0.96  # Paper's value (0.95 <= b <= 0.995)
 
     # History tracking
     history_r = []
@@ -177,24 +184,44 @@ def phase1_validate_iaukf(steps=150, save_results=True):
                   f"V_RMSE={v_rmse:.6f}")
 
     # ========================================
-    # 4. Analyze Results
+    # 4. Analyze Results (Paper's Eq. 39-40 convergence criterion)
     # ========================================
     print("\n[Step 4] Analyzing results...")
 
-    final_r_err = history_r_err[-1]
-    final_x_err = history_x_err[-1]
+    # Paper's convergence criterion: |p_k - p_{k-1}| <= 0.001 (Eq. 39)
+    convergence_threshold = 0.001
+    r_converged = None
+    x_converged = None
 
-    # Find convergence point (error < 5%)
-    r_converged = next((i for i, e in enumerate(history_r_err) if e < 5), None)
-    x_converged = next((i for i, e in enumerate(history_x_err) if e < 5), None)
+    for t in range(1, len(history_r)):
+        if r_converged is None and abs(history_r[t] - history_r[t-1]) <= convergence_threshold:
+            r_converged = t
+        if x_converged is None and abs(history_x[t] - history_x[t-1]) <= convergence_threshold:
+            x_converged = t
+        if r_converged and x_converged:
+            break
+
+    # Paper's final averaging (Eq. 40): average from convergence to end
+    if r_converged and r_converged < len(history_r):
+        r_final = np.mean(history_r[r_converged:])
+    else:
+        r_final = np.mean(history_r[-50:]) if len(history_r) >= 50 else history_r[-1]
+
+    if x_converged and x_converged < len(history_x):
+        x_final = np.mean(history_x[x_converged:])
+    else:
+        x_final = np.mean(history_x[-50:]) if len(history_x) >= 50 else history_x[-1]
+
+    final_r_err = abs(r_final - sim.r_true) / sim.r_true * 100
+    final_x_err = abs(x_final - sim.x_true) / sim.x_true * 100
 
     print(f"\n{'='*70}")
     print("RESULTS SUMMARY")
     print('='*70)
-    print(f"Final estimates:")
-    print(f"  R = {history_r[-1]:.4f} (true: {sim.r_true:.4f}, error: {final_r_err:.2f}%)")
-    print(f"  X = {history_x[-1]:.4f} (true: {sim.x_true:.4f}, error: {final_x_err:.2f}%)")
-    print(f"\nConvergence (error < 5%):")
+    print(f"Final estimates (post-convergence averaging, Eq. 40):")
+    print(f"  R = {r_final:.4f} (true: {sim.r_true:.4f}, error: {final_r_err:.2f}%)")
+    print(f"  X = {x_final:.4f} (true: {sim.x_true:.4f}, error: {final_x_err:.2f}%)")
+    print(f"\nConvergence (|p_k - p_{{k-1}}| <= 0.001):")
     print(f"  R: {'Step ' + str(r_converged) if r_converged else 'Did not converge'}")
     print(f"  X: {'Step ' + str(x_converged) if x_converged else 'Did not converge'}")
     print(f"\nFinal voltage RMSE: {history_v[-1]:.6f} pu")
@@ -303,13 +330,15 @@ def phase1_validate_iaukf(steps=150, save_results=True):
     print("VALIDATION STATUS")
     print('='*70)
 
+    # Paper claims: R error 0.18%, X error 1.55%
+    # We target: R < 1%, X < 2% (accounting for random seed differences)
     success_criteria = {
         'Converges (R < 5%)': r_converged is not None,
         'Converges (X < 5%)': x_converged is not None,
-        'Final error (R < 10%)': final_r_err < 10,
-        'Final error (X < 10%)': final_x_err < 10,
-        'Stable (R std < 0.05)': r_std_final < 0.05,
-        'Stable (X std < 0.05)': x_std_final < 0.05,
+        'Paper-level R (< 1%)': final_r_err < 1.0,
+        'Paper-level X (< 2%)': final_x_err < 2.0,
+        'Stable (R std < 0.02)': r_std_final < 0.02,
+        'Stable (X std < 0.02)': x_std_final < 0.02,
     }
 
     for criterion, passed in success_criteria.items():
@@ -318,14 +347,26 @@ def phase1_validate_iaukf(steps=150, save_results=True):
 
     all_passed = all(success_criteria.values())
 
+    print(f"\n  Paper's results (branch 3-4):")
+    print(f"    R error: 0.18%")
+    print(f"    X error: 1.55%")
+    print(f"\n  Our results:")
+    print(f"    R error: {final_r_err:.2f}%")
+    print(f"    X error: {final_x_err:.2f}%")
+
     if all_passed:
         print(f"\n{'='*70}")
-        print("✓✓✓ PHASE 1 SUCCESS: IAUKF Implementation Validated! ✓✓✓")
+        print("✓✓✓ PHASE 1 SUCCESS: Paper-level accuracy achieved! ✓✓✓")
         print('='*70)
         print("\nNext: Run Phase 2 to train Graph Mamba in same scenario")
+    elif final_r_err < 2.0 and final_x_err < 3.0:
+        print(f"\n{'='*70}")
+        print("✓✓ PHASE 1 GOOD: Close to paper's results")
+        print('='*70)
+        print("\n✓ Ready for Phase 2: python experiments/phase2_train_mamba.py")
     else:
         print(f"\n{'='*70}")
-        print("⚠ PHASE 1 INCOMPLETE: Some criteria not met")
+        print("⚠ PHASE 1 INCOMPLETE: Results differ from paper")
         print('='*70)
         print("\nTuning suggestions:")
         print("  - Adjust Q matrix (process noise)")
@@ -346,7 +387,7 @@ def phase1_validate_iaukf(steps=150, save_results=True):
 
 
 if __name__ == "__main__":
-    results = phase1_validate_iaukf(steps=150)
+    results = phase1_validate_iaukf(steps=300)
 
     if results['success']:
         print("\n✓ Ready for Phase 2: python experiments/phase2_train_mamba.py")

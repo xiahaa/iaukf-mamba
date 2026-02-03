@@ -22,12 +22,19 @@ from model.models_analytical import AnalyticalMeasurementModel
 from model.iaukf import IAUKFMultiSnapshot
 
 
-def run_multi_snapshot_validation(steps=200, num_snapshots=5):
+def run_multi_snapshot_validation(steps=500, num_snapshots=5):
     """
     Validate IAUKF with multiple measurement snapshots.
 
+    According to paper's Section IV.C and Table II, multi-snapshot improves accuracy:
+    - Branch 3-4 with 5 snapshots: R error 0.13%, X error 0.09%
+    - Better than single snapshot: R 0.18%, X 1.55%
+
+    The multi-snapshot model improves measurement redundancy (Eq 31):
+      mt / (nt + n_p) > m / (n + n_p)
+
     Args:
-        steps: Total simulation steps
+        steps: Total simulation steps (more for better convergence)
         num_snapshots: Number of snapshots per update (paper uses 5)
     """
     print("=" * 70)
@@ -119,11 +126,11 @@ def run_multi_snapshot_validation(steps=200, num_snapshots=5):
 
     # Create multi-snapshot IAUKF
     iaukf = IAUKFMultiSnapshot(model, x0, P0, Q0, R_cov, num_snapshots=num_snapshots)
-    iaukf.b_factor = 0.98
+    iaukf.b_factor = 0.96  # Paper's value
 
     print(f"  Augmented state dim: {iaukf.n}")
     print(f"  Num snapshots: {num_snapshots}")
-    print(f"  NSE b_factor: {iaukf.b_factor}")
+    print(f"  NSE b_factor: {iaukf.b_factor} (paper's value)")
 
     # Run IAUKF
     print("\n[3] Running IAUKF Multi-Snapshot...")
@@ -308,7 +315,7 @@ if __name__ == "__main__":
     print("Testing Multi-Snapshot IAUKF (t=5 snapshots)")
     print("="*70)
 
-    results = run_multi_snapshot_validation(steps=300, num_snapshots=5)
+    results = run_multi_snapshot_validation(steps=500, num_snapshots=5)
 
     print("\n" + "=" * 70)
     print("SUMMARY")
@@ -322,3 +329,11 @@ if __name__ == "__main__":
     print(f"\nPaper's multi-snapshot results (Table II):")
     print(f"  R error: 0.13%")
     print(f"  X error: 0.09%")
+
+    # Check if paper-level accuracy achieved
+    if results['r_error'] < 0.5 and results['x_error'] < 0.5:
+        print(f"\n✓✓✓ Paper-level accuracy achieved! ✓✓✓")
+    elif results['r_error'] < 2.0 and results['x_error'] < 3.0:
+        print(f"\n✓✓ Close to paper's results")
+    else:
+        print(f"\n⚠ Results differ from paper - may need further tuning")
