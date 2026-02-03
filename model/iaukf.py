@@ -144,6 +144,12 @@ class IAUKF:
         residual = z - z_pred
 
         self.x = self.x_pred + np.dot(K, residual)
+
+        # Enforce physical constraints: R and X (last 2 elements) must be positive
+        # This prevents the filter from getting stuck with non-physical parameter values
+        self.x[-2] = max(self.x[-2], 1e-4)  # R > 0
+        self.x[-1] = max(self.x[-1], 1e-4)  # X > 0
+
         self.P = self.P_pred - np.dot(K, np.dot(S, K.T))
 
         # Ensure P is symmetric and positive definite
@@ -463,6 +469,11 @@ class IAUKFMultiSnapshot:
         residual = z - z_pred
 
         self.x = self.x_pred + np.dot(K, residual)
+
+        # Enforce physical constraints: R and X (last 2 elements) must be positive
+        self.x[-2] = max(self.x[-2], 1e-4)  # R > 0
+        self.x[-1] = max(self.x[-1], 1e-4)  # X > 0
+
         self.P = self.P_pred - np.dot(K, np.dot(S, K.T))
 
         # Ensure P is symmetric and positive definite

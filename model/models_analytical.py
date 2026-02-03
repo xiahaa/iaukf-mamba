@@ -18,127 +18,117 @@ from pandapower.pd2ppc import _pd2ppc
 
 class AnalyticalMeasurementModel:
     """
-    Analytical measurement model following paper's Eq. 21.
+    FAST analytical measurement model following paper's Eq. 21.
 
-    This model computes measurements directly from the state vector
-    using power system equations, without running power flow.
-
-    Uses pandapower's internal Ybus calculation for correctness.
+    Pre-computes Ybus with original parameters, then adjusts target line
+    contribution based on estimated parameters. Much faster than full Ybus rebuild.
     """
 
     def __init__(self, net, target_line_idx, pmu_indices):
-        """
-        Initialize the model.
-
-        Args:
-            net: pandapower network (used to get topology and base parameters)
-            target_line_idx: Index of the line whose parameters are being estimated
-            pmu_indices: List of bus indices with PMU measurements
-        """
-        self.net = copy.deepcopy(net)  # Make a copy to avoid modifying original
         self.target_line_idx = target_line_idx
-        self.pmu_indices = pmu_indices
+        self.pmu_indices = np.array(pmu_indices)
         self.num_buses = len(net.bus)
-
-        # State dimension: voltages + angles + 2 parameters
         self.state_dim = 2 * self.num_buses + 2
 
-        # Store original line parameters
+        # Store target line info
+        self.from_bus = int(net.line.at[target_line_idx, 'from_bus'])
+        self.to_bus = int(net.line.at[target_line_idx, 'to_bus'])
+        self.line_length = net.line.at[target_line_idx, 'length_km']
         self.original_r = net.line.at[target_line_idx, 'r_ohm_per_km']
         self.original_x = net.line.at[target_line_idx, 'x_ohm_per_km']
 
-        # Get base MVA from pandapower conversion
+        # Run power flow to initialize network, then get Ybus
+        pp.runpp(net, numba=False)
         ppc, _ = _pd2ppc(net)
         self.baseMVA = ppc['baseMVA']
+        Ybus_orig, _, _ = makeYbus(ppc['baseMVA'], ppc['bus'], ppc['branch'])
 
-        # Cache last Ybus to avoid recomputation if parameters unchanged
+        # Store original G and B
+        self.G_orig = Ybus_orig.real.toarray()
+        self.B_orig = Ybus_orig.imag.toarray()
+
+        # Get base impedance for per-unit conversion
+        vn_kv = net.bus.at[net.ext_grid.bus.values[0], 'vn_kv']
+        self.z_base = (vn_kv ** 2) / self.baseMVA
+
+        # Pre-compute original line admittance for subtraction
+        r_ohm_orig = self.original_r * self.line_length
+        x_ohm_orig = self.original_x * self.line_length
+        r_pu_orig = r_ohm_orig / self.z_base
+        x_pu_orig = x_ohm_orig / self.z_base
+        z_sq_orig = r_pu_orig**2 + x_pu_orig**2
+        self.g_orig = r_pu_orig / z_sq_orig
+        self.b_orig = -x_pu_orig / z_sq_orig
+
+        # Cache
         self._cached_r = None
         self._cached_x = None
         self._cached_G = None
         self._cached_B = None
 
     def _get_ybus(self, r_est, x_est):
-        """Get G and B matrices with estimated line parameters using pandapower."""
-        # Check cache
-        if self._cached_r == r_est and self._cached_x == x_est:
+        """Get G and B by adjusting target line in original Ybus. FAST!"""
+        r_round = round(r_est, 8)
+        x_round = round(x_est, 8)
+
+        if self._cached_r == r_round and self._cached_x == x_round:
             return self._cached_G, self._cached_B
 
-        # Update line parameters in the network copy
-        self.net.line.at[self.target_line_idx, 'r_ohm_per_km'] = r_est
-        self.net.line.at[self.target_line_idx, 'x_ohm_per_km'] = x_est
+        # Start with original Ybus
+        G = self.G_orig.copy()
+        B = self.B_orig.copy()
 
-        # Use pandapower's Ybus calculation
-        ppc, _ = _pd2ppc(self.net)
-        Ybus, _, _ = makeYbus(ppc['baseMVA'], ppc['bus'], ppc['branch'])
+        # Remove original line contribution
+        i, j = self.from_bus, self.to_bus
+        G[i,i] -= self.g_orig; G[j,j] -= self.g_orig; G[i,j] += self.g_orig; G[j,i] += self.g_orig
+        B[i,i] -= self.b_orig; B[j,j] -= self.b_orig; B[i,j] += self.b_orig; B[j,i] += self.b_orig
 
-        # Convert to dense arrays
-        G = Ybus.real.toarray()
-        B = Ybus.imag.toarray()
+        # Add new line contribution
+        r_ohm = r_est * self.line_length
+        x_ohm = x_est * self.line_length
+        r_pu = r_ohm / self.z_base
+        x_pu = x_ohm / self.z_base
+        z_sq = r_pu**2 + x_pu**2
+        if z_sq > 1e-20:
+            g_new = r_pu / z_sq
+            b_new = -x_pu / z_sq
+        else:
+            g_new, b_new = 1e10, 0
 
-        # Cache results
-        self._cached_r = r_est
-        self._cached_x = x_est
+        G[i,i] += g_new; G[j,j] += g_new; G[i,j] -= g_new; G[j,i] -= g_new
+        B[i,i] += b_new; B[j,j] += b_new; B[i,j] -= b_new; B[j,i] -= b_new
+
+        self._cached_r = r_round
+        self._cached_x = x_round
         self._cached_G = G
         self._cached_B = B
 
         return G, B
 
     def state_transition(self, x):
-        """
-        State transition function f(x).
-        Identity for parameters, identity for states (random walk).
-        """
+        """Identity state transition."""
         return x.copy()
 
     def measurement_function(self, x):
-        """
-        Analytical measurement function h(x) following paper's Eq. 21.
-
-        Computes:
-        - P_i: Active power injection at bus i
-        - Q_i: Reactive power injection at bus i
-        - V_i: Voltage magnitude at bus i
-        - V_pmu, θ_pmu: PMU voltage magnitude and angle
-
-        Args:
-            x: State vector [V_1...V_n, δ_1...δ_n, R, X]
-
-        Returns:
-            h: Measurement vector [P_inj, Q_inj, V_scada, V_pmu, θ_pmu]
-        """
-        # Extract state components
-        V = np.array(x[:self.num_buses], dtype=float)
-        delta = np.array(x[self.num_buses:2*self.num_buses], dtype=float)
+        """Fast analytical measurement function h(x) - Eq. 21."""
+        V = np.clip(x[:self.num_buses], 0.8, 1.2)
+        delta = x[self.num_buses:2*self.num_buses]
         r_est = max(float(x[-2]), 1e-6)
         x_est = max(float(x[-1]), 1e-6)
 
-        # Clip voltage magnitudes to reasonable range
-        V = np.clip(V, 0.8, 1.2)
-
-        # Get G and B matrices with estimated parameters
         G, B = self._get_ybus(r_est, x_est)
 
-        # Compute power injections (Eq. 21 in paper)
-        P_inj = np.zeros(self.num_buses)
-        Q_inj = np.zeros(self.num_buses)
+        # Vectorized power injection calculation
+        cos_d = np.cos(delta[:, np.newaxis] - delta[np.newaxis, :])
+        sin_d = np.sin(delta[:, np.newaxis] - delta[np.newaxis, :])
+        VV = V[:, np.newaxis] * V[np.newaxis, :]
 
-        for i in range(self.num_buses):
-            for j in range(self.num_buses):
-                delta_ij = delta[i] - delta[j]
-                P_inj[i] += V[i] * V[j] * (G[i, j] * np.cos(delta_ij) + B[i, j] * np.sin(delta_ij))
-                Q_inj[i] += V[i] * V[j] * (G[i, j] * np.sin(delta_ij) - B[i, j] * np.cos(delta_ij))
+        P_inj = np.sum(VV * (G * cos_d + B * sin_d), axis=1) * self.baseMVA
+        Q_inj = np.sum(VV * (G * sin_d - B * cos_d), axis=1) * self.baseMVA
 
-        # Scale to MW (from per-unit)
-        P_inj_mw = P_inj * self.baseMVA
-        Q_inj_mvar = Q_inj * self.baseMVA
-
-        # SCADA measurements: P_inj, Q_inj, V_mag
-        h_scada = np.concatenate([P_inj_mw, Q_inj_mvar, V])
-
-        # PMU measurements: V_mag and θ at PMU buses
-        V_pmu = V[self.pmu_indices]
-        theta_pmu = delta[self.pmu_indices]
-        h_pmu = np.concatenate([V_pmu, theta_pmu])
+        # Combine measurements
+        h_scada = np.concatenate([P_inj, Q_inj, V])
+        h_pmu = np.concatenate([V[self.pmu_indices], delta[self.pmu_indices]])
 
         return np.concatenate([h_scada, h_pmu])
 
