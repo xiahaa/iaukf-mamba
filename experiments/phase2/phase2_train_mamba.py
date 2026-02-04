@@ -15,7 +15,7 @@ from torch.utils.data import Dataset, DataLoader
 from datetime import datetime
 from tqdm import tqdm
 
-from graph_mamba import GraphMambaModel, PhysicsInformedLoss, HAS_MAMBA
+from graphmamba.graph_mamba import GraphMambaModel, PhysicsInformedLoss, HAS_MAMBA
 
 # SwanLab
 try:

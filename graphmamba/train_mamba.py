@@ -4,7 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from torch_geometric.data import Data, Batch
 from simulation import PowerSystemSimulation
-from graph_mamba import GraphMambaModel, PhysicsInformedLoss
+from .graph_mamba import GraphMambaModel, PhysicsInformedLoss
 import pandapower as pp
 import os
 from torch.utils.data import Dataset, DataLoader

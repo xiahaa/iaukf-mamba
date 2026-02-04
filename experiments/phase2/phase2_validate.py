@@ -11,7 +11,7 @@ import numpy as np
 import pickle
 from tqdm import tqdm
 
-from graph_mamba import GraphMambaModel, HAS_MAMBA
+from graphmamba.graph_mamba import GraphMambaModel, HAS_MAMBA
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 

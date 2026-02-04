@@ -29,7 +29,7 @@ except ImportError:
     HAS_SWANLAB = False
     print("Warning: swanlab not available")
 
-from graph_mamba import GraphMambaModel, HAS_MAMBA
+from graphmamba.graph_mamba import GraphMambaModel, HAS_MAMBA
 
 # ========================================
 # Configuration
