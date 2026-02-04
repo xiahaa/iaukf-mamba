@@ -3,7 +3,7 @@ Phase 3: Comprehensive Comparison of All Methods
 =================================================
 
 Compares:
-1. IAUKF (baseline)
+1. IAUKF (baseline) - actual IAUKF runs
 2. Standard Graph Mamba
 3. Enhanced Graph Mamba
 
@@ -21,6 +21,11 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 import pandas as pd
 from tqdm import tqdm
+import pandapower as pp
+
+from model.simulation import PowerSystemSimulation
+from model.models_analytical import AnalyticalMeasurementModel  # Fast analytical model
+from model.iaukf import IAUKF
 
 # ========================================
 # Configuration
@@ -106,70 +111,167 @@ except FileNotFoundError:
     enh_metrics = None
 
 # ========================================
-# Method 3: Simulate IAUKF Performance
+# Method 3: Run Actual IAUKF
 # ========================================
 
-print("\n[4] Simulating IAUKF performance...")
+print("\n[4] Running actual IAUKF on test data...")
 
-# Based on Phase 1 analysis and IAUKF characteristics:
-# - IAUKF assumes constant parameters (Q≈1e-8)
-# - Needs ~20-50 steps to reconverge after parameter change
-# - During reconvergence: errors spike to 10-20%
-# - Steady-state error: 1-3%
+# Setup simulation and model
+sim = PowerSystemSimulation(steps=config['steps_per_episode'])
+# Use analytical model for FAST sigma point evaluation in IAUKF
+model = AnalyticalMeasurementModel(sim.net, sim.line_idx, sim.pmu_buses)
 
-def simulate_iaukf_tracking(r_profile, x_profile, change_interval):
+num_buses = len(sim.net.bus)
+pmu_buses = sim.pmu_buses
+line_length = sim.net.line.at[sim.line_idx, 'length_km']
+
+print(f"  Network: {num_buses} buses, Line {sim.line_idx}")
+print(f"  PMU buses: {pmu_buses}")
+
+
+def run_iaukf_on_episode_fresh(episode, sim, verbose=False):
     """
-    Simulate IAUKF behavior based on Phase 1 characteristics.
+    Run IAUKF on time-varying parameters by generating measurements ON-THE-FLY.
+    
+    Key insight:
+    - Measurements are generated from power flow (accurate)
+    - IAUKF uses AnalyticalMeasurementModel for fast sigma point evaluation
 
-    IAUKF properties:
-    - Converges exponentially to true value (rate ≈ 0.05 per step)
-    - After parameter change: lags behind, needs to reconverge
-    - Adds some noise even when converged (≈2% std)
+    Args:
+        episode: dict with 'r_profile', 'x_profile', 'r_base', 'x_base'
+        sim: PowerSystemSimulation
+        verbose: print progress
+
+    Returns:
+        dict with r/x estimates, errors, etc.
     """
+    # Extract parameter profiles (in total Ohms)
+    r_profile = episode['r_profile'].numpy()
+    x_profile = episode['x_profile'].numpy()
     time_steps = len(r_profile)
-
-    # Initialize with poor guess (50% of first value)
-    r_estimates = np.zeros(time_steps)
-    x_estimates = np.zeros(time_steps)
-
-    r_est = r_profile[0] * 0.5
-    x_est = x_profile[0] * 0.5
-
-    convergence_rate = 0.05  # 5% correction per step
-    noise_std = 0.02  # 2% measurement noise effect
-
+    
+    # Convert to Ohm/km for the model
+    r_profile_per_km = r_profile / line_length
+    x_profile_per_km = x_profile / line_length
+    
+    # Create a fresh ANALYTICAL model for this episode (fast sigma point evaluation)
+    episode_model = AnalyticalMeasurementModel(sim.net, sim.line_idx, sim.pmu_buses)
+    
+    # Get base loads (constant within episode)
+    p_load_base = sim.net.load.p_mw.values.copy()
+    q_load_base = sim.net.load.q_mvar.values.copy()
+    
+    # Initial state: [V, delta, R, X]
+    x0_v = np.ones(num_buses)
+    x0_d = np.zeros(num_buses)
+    x0_r = 0.01  # Small initial value (Ohm/km)
+    x0_x = 0.01
+    x0 = np.concatenate([x0_v, x0_d, [x0_r, x0_x]])
+    
+    # Covariance matrices (same as Phase 1)
+    P0 = np.eye(len(x0)) * 0.01
+    P0[-2, -2] = 0.1
+    P0[-1, -1] = 0.1
+    
+    Q0 = np.eye(len(x0)) * 1e-6
+    Q0[-2, -2] = 1e-6
+    Q0[-1, -1] = 1e-6
+    
+    # Measurement noise covariance
+    R_diag = np.concatenate([
+        np.full(num_buses, 0.02**2),    # P
+        np.full(num_buses, 0.02**2),    # Q
+        np.full(num_buses, 0.02**2),    # V SCADA
+        np.full(len(pmu_buses), 0.005**2),   # V PMU
+        np.full(len(pmu_buses), 0.002**2)    # Theta PMU
+    ])
+    R_cov = np.diag(R_diag)
+    
+    # Create IAUKF with analytical model (fast!)
+    iaukf = IAUKF(episode_model, x0, P0, Q0, R_cov)
+    iaukf.b_factor = 0.96
+    
+    # Run filter with ON-THE-FLY measurement generation
+    r_estimates = []
+    x_estimates = []
+    
+    np.random.seed(42)  # Reproducibility
+    
     for t in range(time_steps):
-        r_true = r_profile[t]
-        x_true = x_profile[t]
-
-        # Check if parameter changed
-        if t > 0 and r_profile[t] != r_profile[t-1]:
-            # Parameter changed! IAUKF lags behind
-            # Keep previous estimate (doesn't know it changed yet)
-            pass
-        else:
-            # Gradually converge to true value
-            r_error = r_true - r_est
-            x_error = x_true - x_est
-
-            # Exponential convergence
-            r_est += convergence_rate * r_error
-            x_est += convergence_rate * x_error
-
-        # Add measurement noise effect
-        r_est += np.random.randn() * noise_std * r_true
-        x_est += np.random.randn() * noise_std * x_true
-
-        r_estimates[t] = r_est
-        x_estimates[t] = x_est
-
+        # Set TRUE network parameters for this timestep
+        sim.net.line.at[sim.line_idx, 'r_ohm_per_km'] = r_profile_per_km[t]
+        sim.net.line.at[sim.line_idx, 'x_ohm_per_km'] = x_profile_per_km[t]
+        
+        # Set constant loads
+        sim.net.load.p_mw = p_load_base
+        sim.net.load.q_mvar = q_load_base
+        
+        # Run power flow ONCE to generate TRUE measurements
+        try:
+            pp.runpp(sim.net, algorithm='nr', numba=False)
+        except:
+            if verbose:
+                print(f"  Warning: Power flow failed at t={t}")
+            if len(r_estimates) > 0:
+                r_estimates.append(r_estimates[-1])
+                x_estimates.append(x_estimates[-1])
+            else:
+                r_estimates.append(x0_r)
+                x_estimates.append(x0_x)
+            continue
+        
+        # Generate SCADA measurements (with noise)
+        p_inj = -sim.net.res_bus.p_mw.values
+        q_inj = -sim.net.res_bus.q_mvar.values
+        v_scada = sim.net.res_bus.vm_pu.values
+        
+        z_scada = np.concatenate([p_inj, q_inj, v_scada])
+        noise_scada = np.random.normal(0, 0.02, size=len(z_scada))
+        z_scada_noisy = z_scada + noise_scada
+        
+        # Generate PMU measurements (with noise)
+        v_pmu = sim.net.res_bus.vm_pu.values[pmu_buses]
+        theta_pmu = np.radians(sim.net.res_bus.va_degree.values[pmu_buses])
+        
+        noise_pmu_v = np.random.normal(0, 0.005, size=len(v_pmu))
+        noise_pmu_theta = np.random.normal(0, 0.002, size=len(theta_pmu))
+        z_pmu_noisy = np.concatenate([v_pmu + noise_pmu_v, theta_pmu + noise_pmu_theta])
+        
+        # Combined measurement
+        z_t = np.concatenate([z_scada_noisy, z_pmu_noisy])
+        
+        # IAUKF predict and update (uses ANALYTICAL model for sigma points - fast!)
+        try:
+            iaukf.predict()
+            x_est = iaukf.update(z_t)
+            
+            r_est = x_est[-2]
+            x_est_param = x_est[-1]
+        except Exception as e:
+            if verbose:
+                print(f"  Warning: IAUKF failed at t={t}: {e}")
+            if len(r_estimates) > 0:
+                r_est = r_estimates[-1]
+                x_est_param = x_estimates[-1]
+            else:
+                r_est = x0_r
+                x_est_param = x0_x
+        
+        r_estimates.append(r_est)
+        x_estimates.append(x_est_param)
+    
+    r_estimates = np.array(r_estimates)
+    x_estimates = np.array(x_estimates)
+    
     # Compute errors
-    r_errors = np.abs(r_estimates - r_profile) / r_profile * 100
-    x_errors = np.abs(x_estimates - x_profile) / x_profile * 100
-
+    r_errors = np.abs(r_estimates - r_profile_per_km) / r_profile_per_km * 100
+    x_errors = np.abs(x_estimates - x_profile_per_km) / x_profile_per_km * 100
+    
     return {
         'r_estimates': r_estimates,
         'x_estimates': x_estimates,
+        'r_true': r_profile_per_km,
+        'x_true': x_profile_per_km,
         'r_errors': r_errors,
         'x_errors': x_errors,
         'r_error_mean': r_errors.mean(),
@@ -178,15 +280,15 @@ def simulate_iaukf_tracking(r_profile, x_profile, change_interval):
         'x_error_std': x_errors.std()
     }
 
-# Simulate on multiple test episodes
-print("  Simulating IAUKF on test episodes...")
+
+# Run IAUKF on test episodes (with fresh measurement generation)
+NUM_IAUKF_EPISODES = 10  # Fewer episodes since this is slower (runs power flow)
+print(f"  Running IAUKF on {NUM_IAUKF_EPISODES} test episodes (fresh measurements)...")
+print(f"  Note: This runs power flow for each timestep, so it's slower but accurate.")
 
 iaukf_results_all = []
-for episode in tqdm(test_data[:20], desc="  IAUKF Sim", ncols=80):
-    r_profile = episode['r_profile'].numpy()
-    x_profile = episode['x_profile'].numpy()
-
-    result = simulate_iaukf_tracking(r_profile, x_profile, config['change_interval'])
+for episode in tqdm(test_data[:NUM_IAUKF_EPISODES], desc="  IAUKF", ncols=80):
+    result = run_iaukf_on_episode_fresh(episode, sim, verbose=False)
     iaukf_results_all.append(result)
 
 # Aggregate IAUKF results
@@ -200,7 +302,7 @@ iaukf_metrics = {
     'x_error_std': iaukf_x_errors.std(),
 }
 
-print(f"\n  ✓ IAUKF Simulated:")
+print(f"\n  ✓ IAUKF Results (actual runs):")
 print(f"    R error: {iaukf_metrics['r_error_mean']:.2f}% ± {iaukf_metrics['r_error_std']:.2f}%")
 print(f"    X error: {iaukf_metrics['x_error_mean']:.2f}% ± {iaukf_metrics['x_error_std']:.2f}%")
 
@@ -280,14 +382,14 @@ if has_std and has_enh:
 
 print("\n[5] Creating visualizations...")
 
-# Pick a representative episode
+# Use the first IAUKF result for plotting (already computed)
 episode_idx = 0
 episode = test_data[episode_idx]
 r_true = episode['r_profile'].numpy()
 x_true = episode['x_profile'].numpy()
 
-# Simulate IAUKF for this episode
-iaukf_result = simulate_iaukf_tracking(r_true, x_true, config['change_interval'])
+# Use actual IAUKF result from earlier computation
+iaukf_result = iaukf_results_all[episode_idx]
 
 # Identify change points
 change_points = []
