@@ -60,3 +60,4 @@ test/
 docs/nouse/
 docs/*_log.txt
 docs/phase3/*_log.txt
+experiments/debug/*
