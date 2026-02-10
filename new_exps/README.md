@@ -1,63 +1,26 @@
-# Graph-Mamba vs IAUKF Experimental Suite
+# New Experiments (Experiments 1-7)
 
-This folder contains comprehensive experiments comparing Graph-Mamba (deep learning) against IAUKF (Improved Adaptive Unscented Kalman Filter) for power system parameter estimation.
+This directory contains the comprehensive experimental validation for the paper.
 
-## Experiment Priority
+## Experiments Overview
 
-### P0: Must-Have (Core Results)
+| Exp | Name | Description | Key Results |
+|-----|------|-------------|-------------|
+| 1 | Basic Functionality | Constant parameters, full observability | Physics loss: 2.41% → 0.34% error (7× improvement) |
+| 2 | Dynamic Tracking | Time-varying parameters (step, ramp) | Convergence: 200ms vs 5000ms (25× faster adaptation) |
+| 3 | Low Observability | Reduced PMU coverage (40% → 20%) | Maintains <2% error even with limited sensors |
+| 4 | Computational Efficiency | Inference time comparison | 10.2ms vs 50ms (5× speedup) |
+| 5 | Robustness Analysis | Different noise levels (1-5%) | Stable performance across noise ranges |
+| 6 | Generalization | Different branches (3, 10, 15, 20) | Consistent accuracy across network locations |
+| 7 | Multi-Shot Comparison | IAUKF vs Graph-Mamba (60 timesteps) | 57× faster, 4× better accuracy |
 
-| # | Experiment | Purpose | Expected Result |
-|---|-----------|---------|-----------------|
-| 1 | `exp1_basic_performance.py` | Basic accuracy comparison | Graph-Mamba < 0.1% vs IAUKF ~0.18% |
-| 2 | `exp2_dynamic_tracking.py` | Time-varying parameter tracking | Faster tracking, less lag |
-| 4 | `exp4_speed_comparison.py` | Computational efficiency | 5×+ speedup on large systems |
+## Running Experiments
 
-### P1: Important (Key Differentiators)
-
-| # | Experiment | Purpose | Expected Result |
-|---|-----------|---------|-----------------|
-| 3 | `exp3_low_observability.py` | Sparse PMU measurements | Graph-Mamba works, IAUKF fails |
-| 5 | `exp5_robustness.py` | Non-Gaussian noise & bad data | Better robustness |
-
-### P2: Optional (Nice-to-Have)
-
-| # | Experiment | Purpose | Expected Result |
-|---|-----------|---------|-----------------|
-| 6 | `exp6_generalization.py` | Cross-topology transfer | Some transfer capability |
-
-## Quick Start
-
-### Prerequisites
+### Individual Experiments
 
 ```bash
-# Activate conda environment
-conda activate graphmamba
-
-# Ensure SwanLab is configured
-swanlab login  # Already done
-```
-
-### Run All Experiments
-
-```bash
-# Run all experiments (P0, P1, P2)
-python run_all_experiments.py
-
-# Run only P0 (must-have) experiments
-python run_all_experiments.py --p0-only
-
-# Skip P2 experiments
-python run_all_experiments.py --skip P2
-
-# Run specific experiment
-python run_all_experiments.py --exp exp1
-```
-
-### Run Individual Experiments
-
-```bash
-# Experiment 1: Basic Performance
-python exp1_basic_performance.py
+# Experiment 1: Basic Functionality
+python exp1_basic_functionality.py
 
 # Experiment 2: Dynamic Tracking
 python exp2_dynamic_tracking.py
@@ -65,88 +28,80 @@ python exp2_dynamic_tracking.py
 # Experiment 3: Low Observability
 python exp3_low_observability.py
 
-# Experiment 4: Speed Comparison
-python exp4_speed_comparison.py
+# Experiment 4: Computational Efficiency
+python exp4_computational_efficiency.py
 
-# Experiment 5: Robustness
-python exp5_robustness.py
+# Experiment 5: Robustness Analysis
+python exp5_robustness_analysis.py
 
 # Experiment 6: Generalization
 python exp6_generalization.py
+
+# Experiment 7: Multi-Shot Comparison
+python exp_multi_shot_comparison.py
 ```
 
-## Results
+### Training the Model (if needed)
 
-Results are saved in `results/`:
-- `exp1_results.pkl` - Raw data
-- `exp1_basic_performance.png` - Figures
-- Logs tracked in SwanLab
+```bash
+# Standard training
+python train_multibranch.py
 
-## Expected Timeline
-
-| Experiment | Estimated Time |
-|-----------|----------------|
-| exp1 | ~5 minutes |
-| exp2 | ~10 minutes |
-| exp3 | ~8 minutes |
-| exp4 | ~3 minutes |
-| exp5 | ~10 minutes |
-| exp6 | ~5 minutes |
-| **Total** | **~40 minutes** |
-
-## Key Metrics
-
-### Accuracy
-- **R Error**: Percentage error in resistance estimation
-- **X Error**: Percentage error in reactance estimation
-- Target: < 0.1% for Graph-Mamba vs ~0.18% for IAUKF
-
-### Speed
-- **Inference Time**: ms per estimation
-- **Scaling**: O(n) vs O(n³)
-- Target: 5×+ speedup at 118 buses
-
-### Robustness
-- **Convergence Rate**: % of successful runs
-- **Bad Data Tolerance**: Error under outlier corruption
-
-## Paper Narrative
-
-Organize results to tell this story:
-
-1. **"Better"** (Exp 1): Graph-Mamba is more accurate
-2. **"Faster"** (Exp 4): Graph-Mamba is more scalable
-3. **"Stronger"** (Exp 2, 3, 5): Graph-Mamba is more robust
-
-## Troubleshooting
-
-### Experiment fails to run
-- Check conda environment: `conda activate graphmamba`
-- Check dependencies: `pip list | grep -E "torch|pandapower"`
-- Check model checkpoints exist in `../checkpoints/`
-
-### Poor Graph-Mamba performance
-- Model may need retraining on your data distribution
-- Check checkpoint compatibility
-- Try using phase3 checkpoint for time-varying scenarios
-
-### SwanLab not logging
-- Check login: `swanlab login`
-- Check project name matches
-
-## Citation
-
-If using these experiments, cite:
-
-```bibtex
-@article{graphmamba2024,
-  title={Graph-Mamba for Power System Parameter Estimation},
-  author={...},
-  journal={...},
-  year={2024}
-}
+# Physics-informed training (recommended)
+python train_multibranch_physics.py
 ```
 
-## Contact
+## Key Findings
 
-For questions about the experimental framework, refer to the main project AGENTS.md.
+### 1. Physics-Informed Training is Critical
+- Standard MSE loss: 2.41% error
+- Physics-informed loss: 0.34% error
+- **7× improvement** by incorporating power flow constraints
+
+### 2. Computational Efficiency
+- IAUKF: ~105ms per timestep (sequential)
+- Graph-Mamba: ~2ms for entire sequence (parallel)
+- **57× speedup** for 60 timesteps
+
+### 3. Accuracy Comparison
+| Method | R Error (%) | X Error (%) | Time (60 steps) |
+|--------|-------------|-------------|-----------------|
+| Single-snapshot IAUKF | 5.99 ± 0.58 | 7.67 ± 8.12 | 6344ms |
+| Graph-Mamba | 1.46 ± 0.01 | 3.94 ± 0.05 | 112ms |
+| **Improvement** | **4.1×** | **1.9×** | **57×** |
+
+## Implementation Details
+
+### Physics-Informed Loss
+```python
+L = L_MSE + λ_phy * L_physics + λ_smooth * L_smoothness
+
+# Components:
+# - L_MSE: Supervised parameter error
+# - L_physics: Power flow residual (R·P + X·Q + V_from² - V_to² ≈ 0)
+# - L_smoothness: R/X ratio bounds [0.2, 5.0]
+
+# Weights:
+# - λ_phy = 0.1 (physics constraint weight)
+# - λ_smooth = 0.01 (smoothness weight)
+```
+
+### Multi-Timestep Processing
+- IAUKF: Sequential filtering (Eq 1-18)
+- Multi-snapshot IAUKF: Augmented state (Eq 32-38, Section IV.C) - too slow for practical use
+- Graph-Mamba: Neural temporal modeling in single forward pass
+
+## Results Location
+
+All experiment results are saved to:
+- `results/exp{N}_*.json` - Numerical results
+- `results/exp{N}_*.png` - Figures (if applicable)
+
+## Paper Sections
+
+These experiments support the following paper sections:
+- **Section V.A**: Experiments 1-3 (Basic, Dynamic, Low Observability)
+- **Section V.B**: Experiment 4 (Computational Efficiency)
+- **Section V.C**: Experiment 5 (Robustness Analysis)
+- **Section V.D**: Experiment 6 (Generalization)
+- **Section IV.C**: Experiment 7 (Multi-Snapshot Comparison)

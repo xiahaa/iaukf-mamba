@@ -1,0 +1,24 @@
+{
+  "single_iaukf": {
+    "r_error_mean": 4.086984460628321,
+    "r_error_std": 0.24810473094201613,
+    "x_error_mean": 4.495923965842594,
+    "time_mean": 7750.423253998936
+  },
+  "multi_iaukf": {
+    "r_error_mean": 0.12290165342668498,
+    "x_error_std": 0.0,
+    "time_mean": 92548.72500000056
+  },
+  "graphmamba": {
+    "r_error_mean": 0.3028036237836973,
+    "r_error_std": 0.018811997279361347,
+    "x_error_mean": 0.9476977485409082,
+    "time_mean": 99.07428166479804
+  },
+  "speedup": 78.22840724923196,
+  "paper_reference": {
+    "single_r_error": 0.18,
+    "multi_r_error": 0.13
+  }
+}
