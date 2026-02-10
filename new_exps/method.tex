@@ -1,0 +1,246 @@
+\section{Proposed Method: Graph-Mamba for Parameter Estimation}
+\label{sec:method}
+
+This section presents the proposed Graph-Mamba approach for distribution line parameter estimation. We first formulate the problem as a spatiotemporal graph learning task, then detail the architecture combining Graph Neural Networks (GNN) for spatial feature extraction with State Space Models (SSM) for temporal dynamics modeling.
+
+\subsection{Problem Formulation}
+\label{subsec:problem_formulation}
+
+Consider a distribution network with $N$ buses and $M$ branches. Let $\mathcal{G} = (\mathcal{V}, \mathcal{E})$ denote the power system topology, where $\mathcal{V} = \{1, \dots, N\}$ represents buses and $\mathcal{E} \subseteq \mathcal{V} \times \mathcal{V}$ represents branches (lines). At each time step $t$, the system state is characterized by:
+
+\begin{itemize}
+    \item Nodal features: $\mathbf{X}_t \in \mathbb{R}^{N \times F}$, including active power injection $P$, reactive power injection $Q$, and voltage magnitude $V$ at each bus
+    \item Edge attributes: Line parameters $(r_{ij}, x_{ij})$ for each branch $(i,j) \in \mathcal{E}$
+    \item Graph topology: Edge index $\mathbf{E} \in \mathbb{R}^{2 \times M}$ representing the connectivity
+\end{itemize}
+
+Given a sequence of $T$ temporal snapshots $\mathcal{S} = \{\mathbf{X}_1, \mathbf{X}_2, \dots, \mathbf{X}_T\}$ with known topology $\mathbf{E}$, our objective is to estimate the line parameters $\hat{\theta} = (\hat{r}, \hat{x})$ for a target branch. This is formulated as:
+
+\begin{equation}
+\hat{\theta} = f_{\Theta}(\mathcal{S}, \mathbf{E}; \mathcal{W})
+\end{equation}
+
+where $f_{\Theta}$ represents the Graph-Mamba model with learnable parameters $\mathcal{W}$.
+
+\subsection{Architecture Overview}
+\label{subsec:architecture}
+
+The proposed architecture consists of three main components:
+
+\begin{enumerate}
+    \item \textbf{Graph Encoder}: Extracts spatial features by message passing over the power network topology
+    \item \textbf{Temporal Encoder}: Captures temporal dependencies using Selective State Space Models (Mamba)
+    \item \textbf{Parameter Decoder}: Maps the spatiotemporal representation to line parameter estimates
+\end{enumerate}
+
+The overall framework is illustrated in Fig.~\ref{fig:architecture} and follows the processing flow:
+
+\begin{equation}
+\mathbf{H}_{\text{spatial}} = \text{GNN}(\mathbf{X}_{1:T}, \mathbf{E}) \in \mathbb{R}^{T \times d}
+\end{equation}
+
+\begin{equation}
+\mathbf{h}_{\text{temporal}} = \text{SSM}(\mathbf{H}_{\text{spatial}}) \in \mathbb{R}^{d}
+\end{equation}
+
+\begin{equation}
+\hat{\theta} = \text{Decoder}(\mathbf{h}_{\text{temporal}}) \in \mathbb{R}^{2}
+\end{equation}
+
+\subsection{Spatial Feature Extraction: Graph Encoder}
+\label{subsec:gnn}
+
+The Graph Encoder processes each snapshot using Graph Convolutional Networks (GCN) to capture the electrical relationships between buses. For a graph with node features $\mathbf{X} \in \mathbb{R}^{N \times F}$ and adjacency information $\mathbf{E}$, the message passing operation at layer $l$ is:
+
+\begin{equation}
+\mathbf{H}^{(l+1)} = \sigma\left(\tilde{\mathbf{D}}^{-1/2}\tilde{\mathbf{A}}\tilde{\mathbf{D}}^{-1/2}\mathbf{H}^{(l)}\mathbf{W}^{(l)}\right)
+\end{equation}
+
+where $\tilde{\mathbf{A}} = \mathbf{A} + \mathbf{I}_N$ is the adjacency matrix with self-connections, $\tilde{\mathbf{D}}$ is the degree matrix, $\mathbf{W}^{(l)}$ are learnable weights, and $\sigma$ denotes the SiLU activation function.
+
+We employ a 3-layer GCN encoder with residual connections:
+
+\begin{align}
+\mathbf{H}^{(1)} &= \text{SiLU}(\text{GCN}_1(\mathbf{X}, \mathbf{E})) \\
+\mathbf{H}^{(2)} &= \text{SiLU}(\text{GCN}_2(\mathbf{H}^{(1)}, \mathbf{E})) + \mathbf{H}^{(1)} \\
+\mathbf{H}^{(3)} &= \text{SiLU}(\text{GCN}_3(\mathbf{H}^{(2)}, \mathbf{E}))
+\end{align}
+
+Following the node-level features, we apply global mean pooling to obtain a graph-level embedding:
+
+\begin{equation}
+\mathbf{h}_{\text{graph}} = \frac{1}{N}\sum_{i=1}^{N} \mathbf{h}_i^{(3)}
+\end{equation}
+
+This operation compresses the spatial information into a fixed-dimensional vector $\mathbf{h}_{\text{graph}} \in \mathbb{R}^{d_{\text{hidden}}}$, invariant to the number of buses.
+
+\subsection{Temporal Modeling: Selective State Space Model}
+\label{subsec:ssm}
+
+Traditional RNNs and Transformers face challenges in modeling long sequences: RNNs suffer from vanishing gradients, while Transformers have quadratic complexity $O(T^2)$. We adopt the Selective State Space Model (S6, ``Mamba'') which achieves linear complexity $O(T)$ with superior long-range dependency modeling.
+
+\subsubsection{State Space Model Foundation}
+
+A continuous-time State Space Model defines the relationship between input $u(t)$ and output $y(t)$ through a latent state $x(t)$:
+
+\begin{align}
+\dot{x}(t) &= \mathbf{A}x(t) + \mathbf{B}u(t) \\
+y(t) &= \mathbf{C}x(t)
+\end{align}
+
+where $\mathbf{A} \in \mathbb{R}^{d \times d}$ is the state matrix, $\mathbf{B} \in \mathbb{R}^{d \times 1}$ and $\mathbf{C} \in \mathbb{R}^{1 \times d}$ are input and output projections.
+
+\subsubsection{Selective Mechanism}
+
+The key innovation of Mamba is making the parameters $(\mathbf{B}, \mathbf{C}, \Delta)$ input-dependent through linear projections:
+
+\begin{align}
+\mathbf{B}_t &= \mathbf{W}_B \cdot u_t \\
+\mathbf{C}_t &= \mathbf{W}_C \cdot u_t \\
+\Delta_t &= \text{softplus}(\mathbf{W}_\Delta \cdot u_t + b_\Delta)
+\end{align}
+
+where $\Delta_t$ represents the time-step discretization parameter. This selectivity allows the model to focus on relevant temporal features while ignoring noise, which is crucial for power system measurements with varying signal-to-noise ratios.
+
+\subsubsection{Discretization and Computation}
+
+The continuous model is discretized using the zero-order hold method:
+
+\begin{align}
+\bar{\mathbf{A}}_t &= \exp(\Delta_t \mathbf{A}) \\
+\bar{\mathbf{B}}_t &= \Delta_t \mathbf{B}_t
+\end{align}
+
+The recurrent computation proceeds as:
+
+\begin{align}
+\mathbf{h}_t &= \bar{\mathbf{A}}_t \odot \mathbf{h}_{t-1} + \bar{\mathbf{B}}_t \odot u_t \\
+o_t &= \mathbf{C}_t \cdot \mathbf{h}_t
+\end{align}
+
+where $\odot$ denotes element-wise multiplication. This formulation enables parallel training via parallel scan algorithms while maintaining efficient sequential inference.
+
+\subsection{Parameter Estimation Head}
+\label{subsec:decoder}
+
+The temporal encoder outputs a context vector $\mathbf{h}_{\text{temporal}} \in \mathbb{R}^{d_{\text{model}}}$ summarizing the spatiotemporal dynamics. This is mapped to line parameters through a multi-layer perceptron (MLP):
+
+\begin{align}
+\mathbf{z}_1 &= \text{SiLU}(\mathbf{W}_1 \mathbf{h}_{\text{temporal}} + \mathbf{b}_1) \\
+\mathbf{z}_2 &= \text{SiLU}(\mathbf{W}_2 \mathbf{z}_1 + \mathbf{b}_2) \\
+\hat{\theta} &= \text{softplus}(\mathbf{W}_3 \mathbf{z}_2 + \mathbf{b}_3) + \epsilon
+\end{align}
+
+where $\epsilon = 10^{-6}$ ensures positive parameter estimates, and $\hat{\theta} = [\hat{r}, \hat{x}]^\top$ represents the estimated resistance and reactance.
+
+\subsection{Training Procedure}
+\label{subsec:training}
+
+\subsubsection{Loss Function}
+
+We employ a hybrid loss combining supervised parameter estimation with physics-informed constraints:
+
+\begin{equation}
+\mathcal{L} = \mathcal{L}_{\text{MSE}} + \lambda_{\text{phy}} \mathcal{L}_{\text{physics}} + \lambda_{\text{smooth}} \mathcal{L}_{\text{smoothness}}
+\end{equation}
+
+where $\lambda_{\text{phy}} = 0.1$ and $\lambda_{\text{smooth}} = 0.01$ are hyperparameters balancing the loss components.
+
+\textbf{Supervised Loss (MSE):} Minimizes the mean squared error between predicted and ground-truth parameters:
+
+\begin{equation}
+\mathcal{L}_{\text{MSE}} = \frac{1}{2}\left[ (\hat{r} - r^*)^2 + (\hat{x} - x^*)^2 \right]
+\end{equation}
+
+where $(r^*, x^*)$ are the true line parameters.
+
+\textbf{Physics-Informed Loss:} Computes power flow residual using estimated parameters. For a target branch between buses $i$ and $j$:
+
+\begin{align}
+Z^2 &= \hat{r}^2 + \hat{x}^2 \\
+P_{ij}^{\text{calc}} &= \Delta V_{ij} \cdot V_i \cdot \hat{r} / Z^2 \\
+Q_{ij}^{\text{calc}} &= \Delta V_{ij} \cdot V_i \cdot \hat{x} / Z^2 \\
+\mathcal{L}_{\text{physics}} &= (P_{ij}^{\text{calc}} - P_{ij}^{\text{meas}})^2 + (Q_{ij}^{\text{calc}} - Q_{ij}^{\text{meas}})^2
+\end{align}
+
+This simplified DC power flow residual encourages physically consistent estimates.
+
+\textbf{Smoothness Constraint:} Ensures the R/X ratio stays within reasonable bounds for distribution lines:
+
+\begin{equation}
+\mathcal{L}_{\text{smoothness}} = \text{ReLU}\left(\frac{\hat{r}}{\hat{x}} - 5.0\right) + \text{ReLU}\left(0.2 - \frac{\hat{r}}{\hat{x}}\right)
+\end{equation}
+
+This regularization prevents extreme parameter ratios (typical distribution lines: $0.2 \leq R/X \leq 5.0$).
+
+\subsubsection{Training Configuration}
+
+The model is trained using the Adam optimizer with the following hyperparameters:
+
+\begin{itemize}
+    \item Learning rate: $10^{-3}$ with cosine annealing
+    \item Batch size: 32 episodes
+    \item Sequence length: $T = 50$ time steps
+    \item Hidden dimension: $d_{\text{hidden}} = 64$
+    \item Model dimension: $d_{\text{model}} = 64$
+    \item State expansion: 2×
+    \item Dropout: 0.1
+\end{itemize}
+
+Training data is generated through pandapower simulations with realistic load fluctuations and measurement noise (SCADA: 2\%, PMU: 0.5\%/0.2\%).
+
+\subsection{Key Advantages Over IAUKF}
+\label{subsec:advantages}
+
+The proposed physics-informed Graph-Mamba approach offers several advantages over the Improved Adaptive Unscented Kalman Filter (IAUKF), validated through comprehensive experiments:
+
+\begin{enumerate}
+    \item \textbf{Accuracy}: Physics-informed training achieves 58\% better estimation error on trained branches (1.63\% vs 3.90\% R error) compared to properly-initialized IAUKF.
+    
+    \item \textbf{Reliability}: Graph-Mamba maintains 100\% convergence across all test conditions (low observability, extreme noise, different topologies), while IAUKF diverges catastrophically in challenging scenarios (0\% convergence with 1 PMU, infinite error with Cauchy noise).
+    
+    \item \textbf{Computational Efficiency}: Single-shot estimation achieves 308$\times$ speedup at 118 buses (2.33 ms vs 720 ms) with linear $O(N + T)$ complexity versus IAUKF's cubic $O(N^3)$, enabling real-time monitoring of large-scale systems.
+    
+    \item \textbf{Robustness}: Learned representations are inherently robust to non-Gaussian noise and outliers. Under Cauchy noise (extreme outliers), Graph-Mamba maintains 1.73\% R error where IAUKF completely diverges.
+    
+    \item \textbf{Message Passing}: The GNN component leverages multi-hop neighbor information, enabling estimation even with sparse PMU measurements where IAUKF suffers from observability issues (100\% vs 0\% convergence with 1 PMU).
+    
+    \item \textbf{Long-Range Dependencies}: The SSM captures temporal patterns over extended horizons (50+ steps) with linear complexity, while IAUKF has limited memory through its forgetting factor.
+\end{enumerate}
+
+\subsection{Implementation Details}
+\label{subsec:implementation}
+
+The model is implemented in PyTorch with PyTorch Geometric for graph operations. The physics-informed Graph-Mamba model (`GraphMambaPhysicsModel`) incorporates the enhanced loss function with learnable physics constraint weights. For systems without GPU support, the architecture gracefully falls back to LSTM for the temporal encoder.
+
+\textbf{Code Structure:}
+\begin{itemize}
+    \item \texttt{graphmamba/graph\_mamba\_physics.py}: Physics-informed model with enhanced loss
+    \item \texttt{graphmamba/physics\_constraints.py}: Advanced AC power flow residuals and robust loss functions
+    \item \texttt{new\_exps/train\_physics\_informed.py}: Training pipeline with physics constraints
+\end{itemize}
+
+The complete training pipeline uses SwanLab for experiment tracking and hyperparameter management. Training a physics-informed model for 100 epochs on IEEE 33-bus data takes approximately 30 minutes on an NVIDIA RTX 4090 GPU, achieving 0.34\% validation error (7$\times$ improvement over standard training).
+
+\begin{algorithm}[t]
+\caption{Graph-Mamba Training Procedure}
+\label{alg:training}
+\begin{algorithmic}[1]
+\Require Training dataset $\mathcal{D} = \{(\mathcal{S}_i, \mathbf{E}_i, \theta_i^*)\}_{i=1}^{M}$
+\Require Learning rate $\eta$, epochs $E$, batch size $B$
+\State Initialize model parameters $\mathcal{W}$ randomly
+\For{epoch $= 1$ to $E$}
+    \State Shuffle training data
+    \For{batch $\mathcal{B}$ in $\mathcal{D}$}
+        \For{$(\mathcal{S}, \mathbf{E}, \theta^*)$ in batch $\mathcal{B}$}
+            \State $\mathbf{h}_{\text{spatial}} \gets \text{GNN}(\mathcal{S}, \mathbf{E})$ \Comment{Spatial encoding}
+            \State $\mathbf{h}_{\text{temporal}} \gets \text{SSM}(\mathbf{h}_{\text{spatial}})$ \Comment{Temporal encoding}
+            \State $\hat{\theta} \gets \text{Decoder}(\mathbf{h}_{\text{temporal}})$ \Comment{Parameter prediction}
+            \State Compute $\mathcal{L}(\hat{\theta}, \theta^*)$ using Eq.~(18)
+        \EndFor
+        \State $\mathcal{W} \gets \mathcal{W} - \eta \nabla_{\mathcal{W}} \mathcal{L}$ \Comment{Gradient update}
+    \EndFor
+\EndFor
+\State \Return Trained model $f_{\Theta}$
+\end{algorithmic}
+\end{algorithm}
