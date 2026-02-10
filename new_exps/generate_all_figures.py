@@ -245,7 +245,7 @@ def generate_figure_exp4():
     ax.set_ylim(0, 5)
     ax.grid(True, alpha=0.3, linestyle='--')
     ax.set_axisbelow(True)
-    ax.legend(loc='upper right', frameon=True, fancybox=True, shadow=True)
+    ax.legend(loc='upper left', frameon=True, fancybox=True, shadow=True)
     
     save_figure(fig, 'fig_exp4_accuracy_speed_tradeoff')
     plt.close()
