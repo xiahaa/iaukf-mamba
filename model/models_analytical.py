@@ -133,6 +133,187 @@ class AnalyticalMeasurementModel:
         return np.concatenate([h_scada, h_pmu])
 
 
+class AnalyticalMeasurementModelWithBranchFlow(AnalyticalMeasurementModel):
+    """
+    Enhanced analytical measurement model that includes BRANCH POWER FLOW measurements.
+    
+    This matches the paper's Eq. 21 more closely by including P_ij, Q_ij measurements
+    which are DIRECTLY sensitive to line parameters R, X.
+    
+    Measurements: z = [P_inj, Q_inj, V_mag, P_ij, Q_ij, V_pmu, θ_pmu]
+    
+    Branch power flow equations (from paper Eq. 21):
+    P_ij = V_i² * g_ij - V_i*V_j*g_ij*cos(δ_ij) - V_i*V_j*b_ij*sin(δ_ij)
+    Q_ij = -V_i² * b_ij - V_i*V_j*g_ij*sin(δ_ij) + V_i*V_j*b_ij*cos(δ_ij)
+    
+    Where g_ij = R/(R² + X²) and b_ij = -X/(R² + X²) are functions of parameters!
+    """
+    
+    def __init__(self, net, target_line_idx, pmu_indices):
+        super().__init__(net, target_line_idx, pmu_indices)
+        
+        # Store line shunt admittance (if any, usually 0 for distribution lines)
+        self.b_sh = 0.0  # Shunt susceptance, typically 0 for short lines
+        
+    def _get_line_admittance(self, r_est, x_est):
+        """
+        Compute series admittance g_ij, b_ij for the target line.
+        
+        g_ij = R / (R² + X²)  (series conductance)
+        b_ij = -X / (R² + X²) (series susceptance)
+        """
+        r_ohm = r_est * self.line_length
+        x_ohm = x_est * self.line_length
+        r_pu = r_ohm / self.z_base
+        x_pu = x_ohm / self.z_base
+        
+        z_sq = r_pu**2 + x_pu**2
+        if z_sq > 1e-20:
+            g_ij = r_pu / z_sq
+            b_ij = -x_pu / z_sq
+        else:
+            g_ij = 1e10
+            b_ij = 0.0
+        
+        return g_ij, b_ij
+    
+    def measurement_function(self, x):
+        """
+        Enhanced measurement function h(x) including branch power flows.
+        
+        Output: [P_inj, Q_inj, V_scada, P_ij, Q_ij, V_pmu, θ_pmu]
+        
+        Branch power flow (Eq. 21):
+        P_ij = V_i² * g_ij - V_i*V_j*(g_ij*cos(δ_ij) + b_ij*sin(δ_ij))
+        Q_ij = -V_i² * b_ij - V_i*V_j*(g_ij*sin(δ_ij) - b_ij*cos(δ_ij))
+        """
+        V = np.clip(x[:self.num_buses], 0.8, 1.2)
+        delta = x[self.num_buses:2*self.num_buses]
+        r_est = max(float(x[-2]), 1e-6)
+        x_est = max(float(x[-1]), 1e-6)
+        
+        G, B = self._get_ybus(r_est, x_est)
+        
+        # Vectorized power injection calculation
+        cos_d = np.cos(delta[:, np.newaxis] - delta[np.newaxis, :])
+        sin_d = np.sin(delta[:, np.newaxis] - delta[np.newaxis, :])
+        VV = V[:, np.newaxis] * V[np.newaxis, :]
+        
+        P_inj = np.sum(VV * (G * cos_d + B * sin_d), axis=1) * self.baseMVA
+        Q_inj = np.sum(VV * (G * sin_d - B * cos_d), axis=1) * self.baseMVA
+        
+        # === NEW: Branch power flow for target line ===
+        i, j = self.from_bus, self.to_bus
+        g_ij, b_ij = self._get_line_admittance(r_est, x_est)
+        
+        V_i, V_j = V[i], V[j]
+        delta_ij = delta[i] - delta[j]
+        cos_dij = np.cos(delta_ij)
+        sin_dij = np.sin(delta_ij)
+        
+        # Branch power flow from bus i to bus j (Eq. 21)
+        # P_ij = V_i² * g_ij - V_i*V_j*(g_ij*cos(δ_ij) + b_ij*sin(δ_ij))
+        # Q_ij = -V_i² * (b_ij + b_sh/2) - V_i*V_j*(g_ij*sin(δ_ij) - b_ij*cos(δ_ij))
+        P_ij = V_i**2 * g_ij - V_i * V_j * (g_ij * cos_dij + b_ij * sin_dij)
+        Q_ij = -V_i**2 * (b_ij + self.b_sh/2) - V_i * V_j * (g_ij * sin_dij - b_ij * cos_dij)
+        
+        # Scale to MW/MVar
+        P_ij_mw = P_ij * self.baseMVA
+        Q_ij_mvar = Q_ij * self.baseMVA
+        
+        # Combine measurements
+        h_scada = np.concatenate([P_inj, Q_inj, V])
+        h_branch = np.array([P_ij_mw, Q_ij_mvar])
+        h_pmu = np.concatenate([V[self.pmu_indices], delta[self.pmu_indices]])
+        
+        return np.concatenate([h_scada, h_branch, h_pmu])
+
+
+class AnalyticalMeasurementModelWithPMUCurrent(AnalyticalMeasurementModel):
+    """
+    Enhanced model with PMU CURRENT measurements for the target line.
+    
+    PMUs can measure both voltage phasors (V, θ) and current phasors (I_mag, I_angle).
+    Current through a line: I_ij = Y_ij * (V_i∠θ_i - V_j∠θ_j)
+    
+    This provides DIRECT observability of line parameters since:
+    Z_ij = (V_i - V_j) / I_ij
+    
+    Measurements: z = [P_inj, Q_inj, V_mag, V_pmu, θ_pmu, I_mag_ij, I_angle_ij]
+    """
+    
+    def __init__(self, net, target_line_idx, pmu_indices):
+        super().__init__(net, target_line_idx, pmu_indices)
+        
+    def measurement_function(self, x):
+        """
+        Measurement function h(x) including PMU current measurements.
+        
+        Current phasor calculation:
+        I_ij = (V_i∠θ_i - V_j∠θ_j) * Y_ij
+        where Y_ij = 1/Z_ij = (R - jX) / (R² + X²) in per-unit
+        
+        Output: [P_inj, Q_inj, V_scada, V_pmu, θ_pmu, I_mag_ij, I_angle_ij]
+        """
+        V = np.clip(x[:self.num_buses], 0.8, 1.2)
+        delta = x[self.num_buses:2*self.num_buses]
+        r_est = max(float(x[-2]), 1e-6)
+        x_est = max(float(x[-1]), 1e-6)
+        
+        G, B = self._get_ybus(r_est, x_est)
+        
+        # Vectorized power injection calculation
+        cos_d = np.cos(delta[:, np.newaxis] - delta[np.newaxis, :])
+        sin_d = np.sin(delta[:, np.newaxis] - delta[np.newaxis, :])
+        VV = V[:, np.newaxis] * V[np.newaxis, :]
+        
+        P_inj = np.sum(VV * (G * cos_d + B * sin_d), axis=1) * self.baseMVA
+        Q_inj = np.sum(VV * (G * sin_d - B * cos_d), axis=1) * self.baseMVA
+        
+        # === PMU CURRENT for target line ===
+        i, j = self.from_bus, self.to_bus
+        
+        # Line admittance in per-unit
+        r_ohm = r_est * self.line_length
+        x_ohm = x_est * self.line_length
+        r_pu = r_ohm / self.z_base
+        x_pu = x_ohm / self.z_base
+        
+        z_sq = r_pu**2 + x_pu**2
+        if z_sq > 1e-20:
+            g_ij = r_pu / z_sq   # Real part of Y
+            b_ij = -x_pu / z_sq  # Imag part of Y (note: b = -X/|Z|²)
+        else:
+            g_ij, b_ij = 1e10, 0.0
+        
+        # Voltage phasors at line terminals
+        V_i, V_j = V[i], V[j]
+        theta_i, theta_j = delta[i], delta[j]
+        
+        # Complex voltage difference: ΔV = V_i∠θ_i - V_j∠θ_j
+        # In rectangular: ΔV_real = V_i*cos(θ_i) - V_j*cos(θ_j)
+        #                 ΔV_imag = V_i*sin(θ_i) - V_j*sin(θ_j)
+        dV_real = V_i * np.cos(theta_i) - V_j * np.cos(theta_j)
+        dV_imag = V_i * np.sin(theta_i) - V_j * np.sin(theta_j)
+        
+        # Current: I = Y * ΔV = (g + jb) * (dV_real + j*dV_imag)
+        # I_real = g*dV_real - b*dV_imag
+        # I_imag = g*dV_imag + b*dV_real
+        I_real = g_ij * dV_real - b_ij * dV_imag
+        I_imag = g_ij * dV_imag + b_ij * dV_real
+        
+        # Current magnitude and angle
+        I_mag = np.sqrt(I_real**2 + I_imag**2)
+        I_angle = np.arctan2(I_imag, I_real)
+        
+        # Combine measurements
+        h_scada = np.concatenate([P_inj, Q_inj, V])
+        h_pmu_v = np.concatenate([V[self.pmu_indices], delta[self.pmu_indices]])
+        h_pmu_i = np.array([I_mag, I_angle])  # PMU current measurement
+        
+        return np.concatenate([h_scada, h_pmu_v, h_pmu_i])
+
+
 class AnalyticalMeasurementModelHolt(AnalyticalMeasurementModel):
     """
     Analytical model with Holt's exponential smoothing for state transition.

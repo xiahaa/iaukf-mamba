@@ -234,7 +234,7 @@ table6 = r"""\begin{table}[h]
 Phase 1 & Constant params & $1.60\%$ & $2.00\%$ & Validate IAUKF baseline \\
  & (IAUKF) & & & (reproduce paper) \\
 \midrule
-Phase 2 & Constant params & $\mathbf{0.01\%}$ & $\mathbf{0.08\%}$ & Prove Graph Mamba \\
+Phase 2 & Constant params & $\mathbf{0.03\%}$ & $\mathbf{0.15\%}$ & Prove Graph Mamba \\
  & (Graph Mamba) & & & concept (ultra-low) \\
 \midrule
 Phase 3 & Time-varying & $9.13\%$ & $8.61\%$ & Demonstrate \\
@@ -281,7 +281,7 @@ CNN-based [12] & Deep learning & Requires images & 4-6\% & \checkmark & --- & --
 LSTM-based [15] & Sequence model & No topology & 5-8\% & \checkmark & Limited & --- \\
 \midrule
 \textbf{Graph Mamba} & \textbf{Spatial-temporal} & \textbf{Learned} & \textbf{3.2\% (varying)} & \checkmark & \textbf{Fast} & \checkmark \\
-\textbf{(Ours)} & \textbf{deep learning} & \textbf{dynamics} & \textbf{0.01\% (constant)} & & & \\
+\textbf{(Ours)} & \textbf{deep learning} & \textbf{dynamics} & \textbf{0.03\% (constant)} & & & \\
 \bottomrule
 \end{tabular}
 \vspace{0.1cm}
@@ -296,6 +296,116 @@ with open(os.path.join(RESULTS_DIR, 'table7_related_work.tex'), 'w') as f:
     f.write(table7)
 
 print("  ✓ Table 7: Related Work Comparison")
+
+# ========================================
+# Table 8: Multi-Branch Estimation (B3)
+# ========================================
+
+print("\n[8] Creating multi-branch estimation table...")
+
+table8 = r"""\begin{table}[h]
+\centering
+\caption{Multi-Branch Parameter Estimation Results}
+\label{tab:multi_branch}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Branch} & \textbf{Type} & \textbf{R Error (\%)} & \textbf{X Error (\%)} \\
+\midrule
+2-3 & Main feeder & $1.96 \pm 1.35$ & $3.42 \pm 2.09$ \\
+3-4 & Main feeder & $2.40 \pm 1.88$ & $2.44 \pm 2.04$ \\
+5-6 & Main feeder & $10.37 \pm 6.27$ & $3.93 \pm 3.24$ \\
+2-19 & Lateral & $22.18 \pm 8.28$ & $9.32 \pm 4.17$ \\
+3-23 & Lateral & $8.42 \pm 8.00$ & $6.80 \pm 4.83$ \\
+17-18 & End branch & $92.29 \pm 38.85$ & $88.81 \pm 53.23$ \\
+21-22 & End branch & $74.58 \pm 5.97$ & $84.28 \pm 1.90$ \\
+\midrule
+\textbf{Main feeder avg} & --- & $\mathbf{4.91}$ & $\mathbf{3.26}$ \\
+\textbf{Lateral avg} & --- & $15.30$ & $8.06$ \\
+\textbf{End branch avg} & --- & $83.43$ & $86.54$ \\
+\bottomrule
+\end{tabular}
+\vspace{0.1cm}
+\begin{tablenotes}
+\small
+\item \textbf{Key Finding:} IAUKF performance varies significantly by branch type. Main feeder branches (high power flow) achieve good accuracy. End branches (low power flow) have poor observability due to weak measurement sensitivity.
+\item \textbf{Implication:} Graph Mamba can leverage spatial patterns to transfer knowledge from well-observed to poorly-observed branches.
+\end{tablenotes}
+\end{table}
+"""
+
+with open(os.path.join(RESULTS_DIR, 'table8_multi_branch.tex'), 'w') as f:
+    f.write(table8)
+
+print("  ✓ Table 8: Multi-Branch Estimation")
+
+# ========================================
+# Table 9: Bad Data Robustness (B4)
+# ========================================
+
+print("\n[9] Creating bad data robustness table...")
+
+table9 = r"""\begin{table}[h]
+\centering
+\caption{IAUKF Robustness to Bad Data}
+\label{tab:bad_data}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Scenario} & \textbf{Missing (\%)} & \textbf{Error (\%)} & \textbf{R Error (\%)} & \textbf{X Error (\%)} \\
+\midrule
+Clean data & 0 & 0 & $\mathbf{2.58 \pm 2.40}$ & $\mathbf{1.85 \pm 1.98}$ \\
+Missing 5\% & 5 & 0 & Diverged & Diverged \\
+Error 5\% & 0 & 5 & Diverged & Diverged \\
+Combined 10\% & 5 & 5 & Diverged & Diverged \\
+\bottomrule
+\end{tabular}
+\vspace{0.1cm}
+\begin{tablenotes}
+\small
+\item \textbf{Critical Finding:} Standard IAUKF is extremely sensitive to bad data. Even 5\% missing or erroneous measurements cause filter divergence.
+\item \textbf{Practical Implication:} Real-world deployment requires robust bad data detection/rejection mechanisms, which are not standard in UKF implementations.
+\item \textbf{Opportunity:} Data-driven methods like Graph Mamba can learn robust representations that are inherently more tolerant to measurement noise and outliers.
+\end{tablenotes}
+\end{table}
+"""
+
+with open(os.path.join(RESULTS_DIR, 'table9_bad_data.tex'), 'w') as f:
+    f.write(table9)
+
+print("  ✓ Table 9: Bad Data Robustness")
+
+# ========================================
+# Table 10: End Branch Observability (Phase C)
+# ========================================
+
+print("\n[10] Creating end branch observability table...")
+
+table10 = r"""\begin{table}[h]
+\centering
+\caption{IAUKF Observability Limitation for End Branches}
+\label{tab:end_branch}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Branch Type} & \textbf{Current (kA)} & \textbf{$\Delta V$ (pu)} & \textbf{IAUKF Error (\%)} \\
+\midrule
+Main (3-4) & 0.1279 & 0.0074 & $\sim$6\% \\
+End (21-22) & 0.0045 (28$\times$ less) & 0.0006 (11$\times$ less) & $\sim$83\% \\
+End (32-33) & 0.0036 (35$\times$ less) & 0.0003 (26$\times$ less) & $\sim$54\% \\
+\bottomrule
+\end{tabular}
+\vspace{0.1cm}
+\begin{tablenotes}
+\small
+\item \textbf{Root Cause:} End branches have 28-35$\times$ lower current flow and 11-26$\times$ smaller voltage drops, resulting in poor signal-to-noise ratio for parameter estimation.
+\item \textbf{IAUKF Limitation:} Traditional filtering methods rely on measurement sensitivity, which is inherently weak for low-power branches.
+\item \textbf{Graph Mamba Advantage:} Neural networks can learn spatial correlations and transfer knowledge from well-observed to poorly-observed branches.
+\end{tablenotes}
+\end{table}
+"""
+
+with open(os.path.join(RESULTS_DIR, 'table10_end_branch.tex'), 'w') as f:
+    f.write(table10)
+
+print("  ✓ Table 10: End Branch Observability")
 
 # ========================================
 # Summary
@@ -313,6 +423,9 @@ print("  4. table4_efficiency.tex - Computational comparison")
 print("  5. table5_statistics.tex - Statistical analysis")
 print("  6. table6_phases.tex - Experimental validation")
 print("  7. table7_related_work.tex - SOTA comparison")
+print("  8. table8_multi_branch.tex - Multi-branch estimation (B3)")
+print("  9. table9_bad_data.tex - Bad data robustness (B4)")
+print(" 10. table10_end_branch.tex - End branch observability")
 
 print("\nAll tables are ready for direct inclusion in LaTeX manuscript!")
 
@@ -345,8 +458,24 @@ Ablation Study Insights:
 
 Phase Results:
   • Phase 1 (IAUKF validation): 1.60% / 2.00% ✓
-  • Phase 2 (Constant params): 0.01% / 0.08% ✓✓
+  • Phase 2 (Constant params): 0.03% / 0.15% ✓✓ (B1: Graph Mamba vs IAUKF 1.60/2.00%)
   • Phase 3 (Time-varying): 3.18% / 3.06% ✓✓✓
+
+B3 Multi-Branch Results:
+  • Main feeder branches: 4.9% / 3.3% (good)
+  • Lateral branches: 15.3% / 8.1% (moderate)
+  • End branches: 83.4% / 86.5% (poor - low observability)
+
+B4 Bad Data Robustness:
+  • Clean data: 2.6% / 1.9% (baseline)
+  • 5% missing/error: DIVERGED (critical limitation)
+  • Implication: Standard IAUKF needs bad data detection
+
+End Branch Analysis:
+  • Main branches: ~6% error
+  • End branches: ~83% error (4.3x degradation)
+  • Root cause: 28-35x lower current, 11-26x smaller ΔV
+  • Graph Mamba advantage: spatial pattern learning
 
 Reliability Metrics:
   • Predictions with <5% error:
