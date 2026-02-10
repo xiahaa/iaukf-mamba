@@ -61,3 +61,9 @@ docs/nouse/
 docs/*_log.txt
 docs/phase3/*_log.txt
 experiments/debug/*
+=1.4.0
+data/phase2/test_data.pkl
+data/phase2/train_data.pkl
+data/phase2/test_data.pkl
+AGENTS.md
+todo_exp.md
