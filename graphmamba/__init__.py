@@ -9,8 +9,8 @@ This package contains Graph Mamba neural network architectures for power system 
 from .graph_mamba import GraphMambaModel, PhysicsInformedLoss, HAS_MAMBA
 from .graph_mamba_enhanced import EnhancedGraphMambaModel
 from .graph_mamba_physics import (
-    GraphMambaPhysicsModel, 
-    PhysicsInformedLossV2, 
+    GraphMambaPhysicsModel,
+    PhysicsInformedLossV2,
     RobustLoss
 )
 
